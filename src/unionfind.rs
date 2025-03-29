@@ -1,79 +1,23 @@
 use std::collections::HashMap;
 use std::hash::Hash;
 
-/*
-  insert(1)
-  insert(2)
-  insert(4)
-
-  root map
-  {
-    1: 1
-    2: 2
-    4: 4
-  }
-
-  size map
-  {
-    1: 1
-    2: 1
-    4: 1
-  }
-
-----------------------
-
-  union(1, 2)
-
-  root map
-  {
-    1: 1
-    2: 1
-    4: 4
-  }
-
-  size map
-  {
-    1: 2
-    4: 1
-  }
-
-----------------------
-
-  union(2, 4)
-
-  root map
-  {
-    1: 1
-    2: 1
-    4: 1
-  }
-
-  size map
-  {
-    1: 3
-  }
-
-
-
-
- */
 #[derive(Debug)]
-struct UnionFind<T> {
+pub struct UnionFind<T> {
     root_map: HashMap<T, T>,
     size_map: HashMap<T, usize>,
 }
 
-struct Entry<T> {
+pub struct Entry<T> {
     root: T,
     size: usize,
 }
 
 impl<T> Entry<T> {
-    fn root(&self) -> &T {
+    pub fn root(&self) -> &T {
         &self.root
     }
 
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.size
     }
 }
@@ -82,41 +26,28 @@ impl<T> UnionFind<T>
 where
     T: Clone + Eq + Hash,
 {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             root_map: HashMap::new(),
             size_map: HashMap::new(),
         }
     }
 
-    fn insert(&mut self, elem: T) -> T {
+    pub fn insert(&mut self, elem: T) -> T {
         let root = self.root_map.entry(elem.clone()).or_insert(elem).clone();
         self.size_map.entry(root.clone()).or_insert(1);
 
         root
     }
 
-    fn get(&self, elem: &T) -> Option<Entry<T>> {
+    pub fn get(&self, elem: &T) -> Option<Entry<T>> {
         let root = self.root_map.get(elem)?.clone();
         let size = *self.size_map.get(elem)?;
         let entry = Entry { root, size };
         Some(entry)
     }
 
-    /*
-
-                         -----
-                         v   |
-     0 -> 1 -> 2 -> 3 -> 4 --^
-
-     find(0) -> 1
-     find(1) -> 2
-     find(2) -> 3
-     find(3) -> 4
-     find(4) -> 4
-
-    */
-    fn find<'a>(&'a self, elem: &'a T) -> Option<&'a T> {
+    pub fn find<'a>(&'a self, elem: &'a T) -> Option<&'a T> {
         let mut current = elem;
         loop {
             let root = self.root_map.get(current)?;
@@ -130,7 +61,7 @@ where
         Some(current)
     }
 
-    fn union(&mut self, elem1: T, elem2: T) -> T {
+    pub fn union(&mut self, elem1: T, elem2: T) -> T {
         if self.connected(&elem1, &elem2) {
             return self.find(&elem1).unwrap().clone();
         }
@@ -171,7 +102,7 @@ where
         root
     }
 
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         // TODO: Bad.
         let mut output = 0;
         for size in self.size_map.values() {
@@ -180,11 +111,11 @@ where
         output
     }
 
-    fn sets(&self) -> usize {
+    pub fn sets(&self) -> usize {
         self.size_map.keys().len()
     }
 
-    fn connected(&self, elem1: &T, elem2: &T) -> bool {
+    pub fn connected(&self, elem1: &T, elem2: &T) -> bool {
         let root1 = self.find(elem1);
         if root1.is_none() {
             return false;
@@ -202,8 +133,7 @@ where
 #[cfg(test)]
 mod tests {
     use crate::unionfind::UnionFind;
-    use std::collections::{HashMap, HashSet};
-    use std::rc::Rc;
+    use std::collections::HashMap;
 
     #[test]
     fn basic_1() {
@@ -306,11 +236,5 @@ mod tests {
         uf.union("H", "I");
         assert_eq!(uf.sets(), 4);
         assert_eq!(uf.size(), 8);
-    }
-
-    #[test]
-    fn test() {
-        let mut hm: HashMap<i32, usize> = HashMap::new();
-        let m = hm.insert(10, 50);
     }
 }
