@@ -3,6 +3,10 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ptr::NonNull;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct UnionFind<T> {
@@ -11,6 +15,9 @@ pub struct UnionFind<T> {
     values: HashMap<T, NonNull<T>>,
     size: usize,
 }
+
+unsafe impl<T: Send> Send for UnionFind<T> {}
+unsafe impl<T: Send> Sync for UnionFind<T> {}
 
 impl<T> Drop for UnionFind<T> {
     fn drop(&mut self) {
@@ -167,6 +174,7 @@ fn pretty_print<T: Debug>(uf: &UnionFind<T>) {
             print!(": ");
             print_entry(value);
         };
+        println!()
     }
     println!("\n}}");
 
@@ -175,6 +183,7 @@ fn pretty_print<T: Debug>(uf: &UnionFind<T>) {
         unsafe { print_entry(key) };
         print!(": ");
         print!("{}", value);
+        println!()
     }
     println!("\n}}");
 
@@ -183,6 +192,7 @@ fn pretty_print<T: Debug>(uf: &UnionFind<T>) {
         print!("\t{key:?}");
         print!(": ");
         unsafe { print_entry(value) };
+        println!()
     }
     println!("\n}}");
 
@@ -192,6 +202,9 @@ fn pretty_print<T: Debug>(uf: &UnionFind<T>) {
 #[cfg(test)]
 mod tests {
     use crate::unsafe_unionfind::{UnionFind, pretty_print};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn pretty_printing() {
@@ -308,5 +321,88 @@ mod tests {
         uf.union("H", "I");
         assert_eq!(uf.sets(), 4);
         assert_eq!(uf.size(), 8);
+    }
+
+    #[test]
+    fn threads_1() {
+        let uf = Arc::new(Mutex::new(UnionFind::new()));
+        let uf1 = uf.clone();
+        let t1 = thread::spawn(move || {
+            let mut uf = uf1.lock().unwrap();
+            for i in 0..3 {
+                uf.insert(i);
+            }
+        });
+
+        let uf2 = uf.clone();
+        let t2 = thread::spawn(move || {
+            let mut uf = uf2.lock().unwrap();
+            for i in 3..6 {
+                uf.insert(i);
+            }
+        });
+
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let mut uf = uf.lock().unwrap();
+
+        for i in 0..5 {
+            uf.union(i, i + 1);
+        }
+
+        pretty_print(&uf);
+    }
+
+    #[test]
+    fn threads_2() {
+        let mut uf = UnionFind::new();
+        for i in 0..5 {
+            uf.insert(i);
+        }
+        let ptr = Box::into_raw(Box::new(uf));
+        let r1 = unsafe { ptr.as_ref().unwrap() };
+        let r2 = unsafe { ptr.as_ref().unwrap() };
+
+        let t1 = thread::spawn(move || {
+            for i in 0..5 {
+                let f = r1.find(&i);
+                println!("[1] {f:?}");
+            }
+        });
+
+        let t2 = thread::spawn(move || {
+            for i in 0..5 {
+                let f = r2.find(&i);
+                println!("[2] {f:?}");
+            }
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let _ = unsafe { Box::from_raw(ptr) };
+    }
+
+    #[test]
+    fn threads_3() {
+        let mut uf = UnionFind::new();
+        for i in 0..5 {
+            uf.insert(i);
+        }
+
+        thread::scope(|s| {
+            s.spawn(|| {
+                for i in 0..5 {
+                    let f = uf.find(&i);
+                    println!("[1] {f:?}");
+                }
+            });
+            s.spawn(|| {
+                for i in 0..5 {
+                    let f = uf.find(&i);
+                    println!("[2] {f:?}");
+                }
+            });
+        });
     }
 }
