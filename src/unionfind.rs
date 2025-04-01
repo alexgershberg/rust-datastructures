@@ -153,8 +153,6 @@ where
 #[cfg(test)]
 mod tests {
     use crate::unionfind::UnionFind;
-    use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::rc::Rc;
 
     #[test]
