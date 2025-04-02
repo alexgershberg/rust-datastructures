@@ -80,11 +80,50 @@ impl Trie {
     }
 
     pub fn remove(&mut self, text: &str) -> bool {
-        todo!()
+        let Some((mut current, path)) = self.internal_traverse(text) else {
+            return false;
+        };
+
+        let current = unsafe { current.as_mut() };
+
+        if !current.terminal {
+            return false;
+        }
+
+        current.terminal = false;
+
+        if !current.children.is_empty() {
+            return true;
+        }
+
+        for (c, mut n) in path.into_iter().rev() {
+            unsafe {
+                let node = n.as_mut();
+                if let Some(child) = node.children.get_mut(&c) {
+                    let child = child.as_ref();
+                    if !child.terminal && child.children.is_empty() {
+                        let ptr = node.children.remove(&c).unwrap();
+                        let _ = Box::from_raw(ptr.as_ptr());
+                    }
+                }
+            }
+        }
+
+        if let Some(root) = self.root {
+            unsafe {
+                let root = root.as_ptr();
+                if (*root).children.is_empty() {
+                    let _ = Box::from_raw(root);
+                    self.root = None;
+                }
+            }
+        }
+
+        true
     }
 
     pub fn contains(&self, text: &str) -> bool {
-        let Some(current) = self.internal_traverse(text) else {
+        let Some((current, _)) = self.internal_traverse(text) else {
             return false;
         };
 
@@ -92,13 +131,16 @@ impl Trie {
         current.terminal
     }
 
-    fn internal_traverse(&self, text: &str) -> Option<NonNull<Node>> {
+    fn internal_traverse(&self, text: &str) -> Option<(NonNull<Node>, Vec<(char, NonNull<Node>)>)> {
         let Some(root) = self.root else {
             return None;
         };
 
+        let mut path = vec![];
         let mut current = root;
         for c in text.chars() {
+            path.push((c, current));
+
             let node = unsafe { &*current.as_ptr() };
             let children = &node.children;
             let Some(&node) = children.get(&c) else {
@@ -107,11 +149,11 @@ impl Trie {
             current = node;
         }
 
-        Some(current)
+        Some((current, path))
     }
 
     fn suggest(&self, text: &str) -> Vec<String> {
-        let Some(current) = self.internal_traverse(text) else {
+        let Some((current, _)) = self.internal_traverse(text) else {
             return vec![];
         };
 
@@ -204,30 +246,7 @@ fn print_trie(trie: &Trie) {
 
 #[cfg(test)]
 mod tests {
-    use crate::trie::{Node, Trie, print_trie};
-    use std::collections::HashMap;
-    use std::ptr::NonNull;
-
-    #[test]
-    fn debug_node() {
-        let node = Node {
-            children: HashMap::new(),
-            terminal: true,
-        };
-        let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(node))) };
-        let node = Node {
-            children: HashMap::from([('C', ptr)]),
-            terminal: false,
-        };
-        println!("{node:#?}");
-    }
-
-    #[test]
-    fn debug_trie() {
-        let mut trie = Trie::new();
-        trie.insert("Alex");
-        println!("{:#?}", &trie);
-    }
+    use crate::trie::Trie;
 
     #[test]
     fn insert_1() {
@@ -238,8 +257,6 @@ mod tests {
         assert!(trie.insert("Heron"));
         assert!(trie.insert("Stuff"));
         assert!(trie.insert("Alex"));
-        print_trie(&trie);
-        // println!("{trie:?}");
     }
 
     #[test]
@@ -316,7 +333,46 @@ mod tests {
     fn remove_2() {
         let mut trie = Trie::new();
         assert!(trie.insert("Hello"));
+
         assert!(trie.remove("Hello"));
+
+        assert!(!trie.contains("Hello"));
+    }
+
+    #[test]
+    fn remove_3() {
+        let mut trie = Trie::new();
+        assert!(trie.insert("Hello"));
+        assert!(trie.insert("Help"));
+
+        assert!(trie.remove("Help"));
+
+        assert!(trie.contains("Hello"));
+        assert!(!trie.contains("Help"));
+    }
+
+    #[test]
+    fn remove_4() {
+        let mut trie = Trie::new();
+        assert!(trie.insert("Hello"));
+        assert!(trie.insert("Help"));
+
+        assert!(trie.remove("Hello"));
+
+        assert!(trie.contains("Help"));
+        assert!(!trie.contains("Hello"));
+    }
+
+    #[test]
+    fn remove_5() {
+        let mut trie = Trie::new();
+        assert!(trie.insert("Hello"));
+        assert!(trie.insert("Help"));
+
+        assert!(!trie.remove("Hel"));
+
+        assert!(trie.contains("Help"));
+        assert!(trie.contains("Hello"));
     }
 
     #[test]
@@ -348,7 +404,7 @@ mod tests {
     fn internal_traverse_1() {
         let mut trie = Trie::new();
         trie.insert("World");
-        let ptr = trie.internal_traverse("Worl").unwrap();
+        let (ptr, _) = trie.internal_traverse("Worl").unwrap();
         let node = unsafe { ptr.as_ref() };
         let keys = node.children.keys().collect::<Vec<_>>();
         assert_eq!(keys.len(), 1);
