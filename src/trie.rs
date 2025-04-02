@@ -84,8 +84,17 @@ impl Trie {
     }
 
     pub fn contains(&self, text: &str) -> bool {
-        let Some(root) = self.root else {
+        let Some(current) = self.internal_traverse(text) else {
             return false;
+        };
+
+        let current = unsafe { &*current.as_ptr() };
+        current.terminal
+    }
+
+    fn internal_traverse(&self, text: &str) -> Option<NonNull<Node>> {
+        let Some(root) = self.root else {
+            return None;
         };
 
         let mut current = root;
@@ -93,13 +102,36 @@ impl Trie {
             let node = unsafe { &*current.as_ptr() };
             let children = &node.children;
             let Some(&node) = children.get(&c) else {
-                return false;
+                return None;
             };
             current = node;
         }
 
-        let current = unsafe { &*current.as_ptr() };
-        current.terminal
+        Some(current)
+    }
+
+    fn suggest(&self, text: &str) -> Vec<String> {
+        let Some(current) = self.internal_traverse(text) else {
+            return vec![];
+        };
+
+        let mut stack = vec![(String::new(), current)];
+        let mut output = vec![];
+
+        while let Some((text, current)) = stack.pop() {
+            let node = unsafe { current.as_ref() };
+            if node.terminal && !text.is_empty() {
+                output.push(text.clone());
+            }
+
+            for (&c, &ptr) in &node.children {
+                let mut text = text.clone();
+                text.push(c);
+                stack.push((text.clone(), ptr));
+            }
+        }
+
+        output
     }
 }
 
@@ -285,5 +317,41 @@ mod tests {
         let mut trie = Trie::new();
         assert!(trie.insert("Hello"));
         assert!(trie.remove("Hello"));
+    }
+
+    #[test]
+    fn suggest_1() {
+        let mut trie = Trie::new();
+        trie.insert("Hello World");
+        trie.insert("Hello Rust");
+        trie.insert("Hello Unsafe Rust");
+        trie.insert("Hello C++");
+
+        let suggestions = trie.suggest("Hello ");
+        assert_eq!(suggestions.len(), 4);
+        assert!(suggestions.contains(&"World".to_string()));
+        assert!(suggestions.contains(&"Rust".to_string()));
+        assert!(suggestions.contains(&"Unsafe Rust".to_string()));
+        assert!(suggestions.contains(&"C++".to_string()));
+    }
+
+    #[test]
+    fn suggest_2() {
+        let mut trie = Trie::new();
+        trie.insert("Hello!");
+
+        let suggestions = trie.suggest("A");
+        assert_eq!(suggestions.len(), 0);
+    }
+
+    #[test]
+    fn internal_traverse_1() {
+        let mut trie = Trie::new();
+        trie.insert("World");
+        let ptr = trie.internal_traverse("Worl").unwrap();
+        let node = unsafe { ptr.as_ref() };
+        let keys = node.children.keys().collect::<Vec<_>>();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0], &'d');
     }
 }
