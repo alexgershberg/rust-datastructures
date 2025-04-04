@@ -355,18 +355,12 @@ where
     K: Debug,
     V: Debug,
 {
-    let mut stack = VecDeque::from([(None, ptr, -1)]);
-
-    let mut offset = 0;
-    while let Some((k, current, lvl)) = stack.pop_front() {
-        if lvl == 0 {
-            offset = 0;
-        }
-
+    let mut stack = VecDeque::from([(None, 0, ptr, -1)]);
+    while let Some((k, mut offset, current, lvl)) = stack.pop_front() {
         if let Some(key) = k {
-            let line = format!("offset: {offset} | lvl: {lvl} {key:4?}  ->  ");
-            print!("{:>offset$}", line);
+            let line = format!("offset: {offset:3} | lvl: {lvl} {key:4?}  ->  ");
             offset += line.chars().count();
+            print!("{:.>offset$}", line);
         }
 
         let mut should_print_new_line = false;
@@ -374,23 +368,25 @@ where
         let node = unsafe { current.as_ref() };
         match node {
             Node::Internal(internal) => {
-                for (k, ptr) in internal.links.iter().rev() {
-                    stack.push_front((Some(k), *ptr, lvl + 1));
+                for (index, (k, ptr)) in internal.links.iter().rev().enumerate() {
+                    let last = index == internal.links.len() - 1;
+                    let mut offset = offset;
+                    if last {
+                        offset = 0;
+                    }
+                    stack.push_front((Some(k), offset, *ptr, lvl + 1));
                 }
             }
             Node::Leaf(leaf) => {
                 let mut first = true;
                 for (k, v) in &leaf.data {
-                    let line = format!("offset: {offset} | {k:4?}: {v:4?}");
-                    // offset += line.chars().count();
-                    // let mut offset = offset;
-
+                    let line = format!("{k:4?}: {v:4?}");
                     let mut offset = offset + line.chars().count();
                     if first {
                         offset = 0;
                         first = false;
                     }
-                    println!("{line:>offset$}");
+                    println!("{line:.>offset$}");
                 }
 
                 should_print_new_line = true;
@@ -398,7 +394,6 @@ where
         }
 
         if should_print_new_line {
-            // offset = 0;
             println!()
         }
     }
@@ -419,8 +414,8 @@ mod tests {
     use std::ptr::NonNull;
 
     mod bplustree {
-        use crate::bplustree::{BPlusTree, Node, print_bplustree, print_ptr};
-        use rand::{random, random_range};
+        use crate::bplustree::{BPlusTree, Node, print_bplustree};
+        use rand::random_range;
 
         #[test]
         fn print_single_level() {
