@@ -350,17 +350,29 @@ where
     unsafe { print_node(root) };
 }
 
+/*
+offset:   0 | lvl: 0 (12345,    0)  ->  offset:   0 | lvl: 1 (12345,    0)  ->  (12345,    0):    0
+                                        (12345,    5):    1
+
+                                        offset:  40 | lvl: 1 (12345,   10)  ->  (12345,   10):    2
+                                                                                (12345,   15):    3
+ */
+
 unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>)
 where
     K: Debug,
     V: Debug,
 {
-    let mut stack = VecDeque::from([(None, 0, ptr, -1)]);
-    while let Some((k, mut offset, current, lvl)) = stack.pop_front() {
+    let mut stack = VecDeque::from([(None, 0, false, ptr, -1)]);
+    while let Some((k, mut offset, ignore_offset, current, lvl)) = stack.pop_front() {
         if let Some(key) = k {
-            let line = format!("offset: {offset:3} | lvl: {lvl} {key:4?}  ->  ");
+            let line = format!("{key:4?}  ->  ");
             offset += line.chars().count();
-            print!("{:.>offset$}", line);
+            let mut offset = offset;
+            if ignore_offset {
+                offset = 0;
+            }
+            print!("{:>offset$}", line);
         }
 
         let mut should_print_new_line = false;
@@ -370,11 +382,11 @@ where
             Node::Internal(internal) => {
                 for (index, (k, ptr)) in internal.links.iter().rev().enumerate() {
                     let last = index == internal.links.len() - 1;
-                    let mut offset = offset;
+                    let mut ignore_offset = false;
                     if last {
-                        offset = 0;
+                        ignore_offset = true
                     }
-                    stack.push_front((Some(k), offset, *ptr, lvl + 1));
+                    stack.push_front((Some(k), offset, ignore_offset, *ptr, lvl + 1));
                 }
             }
             Node::Leaf(leaf) => {
@@ -386,7 +398,7 @@ where
                         offset = 0;
                         first = false;
                     }
-                    println!("{line:.>offset$}");
+                    println!("{line:>offset$}");
                 }
 
                 should_print_new_line = true;
@@ -480,6 +492,12 @@ mod tests {
             println!();
             btree.insert((12345, 50), 10);
             println!();
+
+            let root = unsafe { btree.root.unwrap().as_mut() };
+            let Node::Internal(root) = root else {
+                unreachable!()
+            };
+            root.links.pop();
 
             print_bplustree(&btree);
             println!();
