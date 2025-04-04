@@ -350,14 +350,6 @@ where
     unsafe { print_node(root) };
 }
 
-/*
-offset:   0 | lvl: 0 (12345,    0)  ->  offset:   0 | lvl: 1 (12345,    0)  ->  (12345,    0):    0
-                                        (12345,    5):    1
-
-                                        offset:  40 | lvl: 1 (12345,   10)  ->  (12345,   10):    2
-                                                                                (12345,   15):    3
- */
-
 unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>)
 where
     K: Debug,
@@ -441,47 +433,6 @@ mod tests {
 
         #[test]
         fn print_three_levels() {
-            /*
-               (0) -> (0) -> (0)
-                             (1)
-
-                      (2) -> (2)
-                             (3)
-
-               (4) -> (4) -> (4)
-                             (5)
-
-                      (6) -> (6)
-                             (7)
-
-                      (8) -> (8)
-                             (9)
-                             (10)
-
-              stack
-              4
-              0
-
-              printed
-
-                (12345,    0)  ->  (12345,    0)  ->  (12345,    0):    0
-                                   (12345,    5):    1
-
-                (12345,   10)  ->  (12345,   10):    2
-                                   (12345,   15):    3
-
-                (12345,   20)  ->  (12345,   20)  ->  (12345,   20):    4
-                                   (12345,   25):    5
-
-                (12345,   30)  ->  (12345,   30):    6
-                                   (12345,   35):    7
-
-                (12345,   40)  ->  (12345,   40):    8
-                                   (12345,   45):    9
-                                   (12345,   50):   10
-
-
-            */
             let mut btree = BPlusTree::new(4);
             for i in 0..10 {
                 btree.insert((12345, 5 * i), i);
@@ -493,18 +444,7 @@ mod tests {
             btree.insert((12345, 50), 10);
             println!();
 
-            let root = unsafe { btree.root.unwrap().as_mut() };
-            let Node::Internal(root) = root else {
-                unreachable!()
-            };
-            root.links.pop();
-
             print_bplustree(&btree);
-            println!();
-
-            // println!("{btree:#?}");
-            // let root = btree.root.unwrap();
-            // unsafe { print_ptr(root) };
         }
 
         #[test]
