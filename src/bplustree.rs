@@ -25,6 +25,11 @@ impl<K, V> Internal<K, V> {
     fn size(&self) -> usize {
         self.links.len()
     }
+
+    fn smallest_key(&self) -> Option<&K> {
+        let link = self.links.first()?;
+        Some(&link.0)
+    }
 }
 
 impl<K, V> Internal<K, V>
@@ -64,7 +69,7 @@ impl<K, V> Internal<K, V>
 where
     K: Ord,
 {
-    fn find(&self, k: &K) -> NonNull<Node<K, V>> {
+    fn find(&self, k: &K) -> &(K, NonNull<Node<K, V>>) {
         debug_assert!(
             !self.links.is_empty(),
             "An internal Node must have children"
@@ -75,7 +80,21 @@ where
             .binary_search_by(|(key, _)| key.cmp(k))
             .unwrap_or_else(|index| if index == 0 { index } else { index - 1 });
 
-        self.links[index].1
+        &self.links[index]
+    }
+
+    fn find_mut(&mut self, k: &K) -> &mut (K, NonNull<Node<K, V>>) {
+        debug_assert!(
+            !self.links.is_empty(),
+            "An internal Node must have children"
+        );
+
+        let index = self
+            .links
+            .binary_search_by(|(key, _)| key.cmp(k))
+            .unwrap_or_else(|index| if index == 0 { index } else { index - 1 });
+
+        &mut self.links[index]
     }
 }
 
@@ -107,6 +126,11 @@ impl<K, V> Leaf<K, V> {
 
     fn size(&self) -> usize {
         self.data.len()
+    }
+
+    fn smallest_key(&self) -> Option<&K> {
+        let entry = self.data.first()?;
+        Some(&entry.0)
     }
 }
 
@@ -167,14 +191,8 @@ impl<K, V> Node<K, V> {
 
     fn smallest_key(&self) -> Option<&K> {
         match self {
-            Node::Internal(internal) => {
-                let link = internal.links.first()?;
-                Some(&link.0)
-            }
-            Node::Leaf(leaf) => {
-                let entry = leaf.data.first()?;
-                Some(&entry.0)
-            }
+            Node::Internal(internal) => internal.smallest_key(),
+            Node::Leaf(leaf) => leaf.smallest_key(),
         }
     }
 
@@ -185,7 +203,7 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    fn set_first(&mut self, k: K) {
+    fn set_smallest(&mut self, k: K) {
         match self {
             Node::Internal(internal) => {
                 if let Some(first) = internal.links.get_mut(0) {
@@ -240,6 +258,23 @@ impl<K, V> Node<K, V> {
                 panic!("Expected a Leaf node but got Internal")
             }
             Node::Leaf(leaf) => leaf,
+        }
+    }
+}
+
+impl<K, V> Node<K, V>
+where
+    K: Ord,
+{
+    fn update_key(&mut self, k: K) {
+        match self {
+            Node::Internal(internal) => {
+                let entry = internal.find_mut(&k);
+                (*entry).0 = k;
+            }
+            Node::Leaf(leaf) => {
+                todo!()
+            }
         }
     }
 }
@@ -303,46 +338,34 @@ where
             return None;
         }
 
-        let mut leaf_ptr = self.find_leaf_node(&k).unwrap(); // SAFETY: We checked that root is not None
-        let node = unsafe { leaf_ptr.as_mut() };
-        let Node::Leaf(leaf) = node else {
-            unreachable!();
-        };
+        let mut node_ptr = self.find_leaf_node(&k).unwrap(); // SAFETY: We checked that root is not None
+        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
 
-        let entry = leaf.insert(k.clone(), v);
+        let mut need_to_recursively_update_parents = false;
+        if let Some(smallest_key) = leaf.smallest_key() {
+            if &k < smallest_key {
+                need_to_recursively_update_parents = true;
+            }
+        }
 
-        let new_entry = entry.is_none();
-        if new_entry {
+        let value = leaf.insert(k, v);
+        if value.is_none() {
             self.size += 1;
         }
 
-        if let Some(mut parent_ptr) = leaf.parent {
-            // Is parent's first node key value higher than what we've just inserted? Then update it.
-            let parent = unsafe { parent_ptr.as_mut() };
-            let first = parent.smallest_key().unwrap(); // SAFETY: This Node is our parent, therefore it MUST have at least one value.
-            let should_update_parents_first = *first > k;
-            if should_update_parents_first {
-                // Propagate first key update to all parents up (tested by: smallest_key_update_should_propagate_to_all_parents)
-                let mut queue = VecDeque::from([parent_ptr]);
-                while let Some(mut current_ptr) = queue.pop_front() {
-                    let current = unsafe { current_ptr.as_mut() };
-                    current.set_first(k.clone());
-
-                    if let Some(parent_ptr) = current.parent() {
-                        queue.push_front(parent_ptr);
-                    }
-                }
-            }
+        if need_to_recursively_update_parents {
+            unsafe { self.update_parent_smallest_key(node_ptr) };
         }
 
+        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() }; // Miri Stacked Borrows rule violation without this line
         if leaf.size() > self.max_node_size() {
             let new_leaf_ptr = leaf.split();
             unsafe {
-                self.insert_into_parent_node(leaf_ptr, new_leaf_ptr);
+                self.insert_into_parent_node(node_ptr, new_leaf_ptr);
             }
         }
 
-        entry
+        value
     }
 
     fn find_leaf_node(&self, k: &K) -> Option<NonNull<Node<K, V>>> {
@@ -355,7 +378,7 @@ where
                 break;
             };
 
-            current = internal.find(k);
+            current = internal.find(k).1;
         }
 
         Some(current)
@@ -363,12 +386,26 @@ where
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
         println!("btree.remove(&{k:?});");
-        let leaf = unsafe { self.find_leaf_node(k)?.as_mut().as_leaf_mut() };
+        let mut node_ptr = self.find_leaf_node(k)?;
+        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
+
         let value = leaf.remove(k);
         if value.is_some() {
             self.size -= 1;
         }
 
+        let mut need_to_recursively_update_parents = false;
+        if let Some(smallest_key) = leaf.smallest_key() {
+            if k < smallest_key {
+                need_to_recursively_update_parents = true;
+            }
+        }
+
+        if need_to_recursively_update_parents {
+            unsafe { self.update_parent_key(node_ptr) };
+        }
+
+        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() }; // Miri Stacked Borrows rule violation without this line
         if leaf.size() < self.min_node_size() {
             print_bplustree(self, DebugOptions::default());
             todo!()
@@ -446,6 +483,36 @@ where
         } else {
             let parent_ptr = unsafe { Internal::new_with_children(old_ptr, new_ptr) };
             self.root = Some(parent_ptr);
+        }
+    }
+
+    unsafe fn update_parent_smallest_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
+        let node = unsafe { node_ptr.as_mut() };
+        let Some(smallest) = node.smallest_key().cloned() else {
+            return;
+        };
+
+        let mut current = node;
+        while let Some(mut parent_ptr) = current.parent() {
+            let parent = unsafe { parent_ptr.as_mut() };
+            parent.set_smallest(smallest.clone());
+
+            current = parent;
+        }
+    }
+
+    unsafe fn update_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
+        let node = unsafe { node_ptr.as_mut() };
+        let Some(smallest) = node.smallest_key().cloned() else {
+            return;
+        };
+
+        let mut current = node;
+        while let Some(mut parent_ptr) = current.parent() {
+            let parent = unsafe { parent_ptr.as_mut() };
+            parent.update_key(smallest.clone());
+
+            current = parent;
         }
     }
 }
@@ -1246,7 +1313,7 @@ mod tests {
                 ],
             };
 
-            let node = internal.find(&(12345, 8));
+            let (_, node) = *internal.find(&(12345, 8));
             assert_eq!(node, leaf2);
 
             unsafe {
