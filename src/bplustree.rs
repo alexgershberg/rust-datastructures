@@ -370,6 +370,7 @@ where
         }
 
         if leaf.size() < self.min_node_size() {
+            print_bplustree(self, DebugOptions::default());
             todo!()
         }
 
@@ -596,8 +597,45 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::bplustree::{Leaf, Node};
+    use crate::bplustree::{BPlusTree, Leaf, Node};
+    use std::collections::VecDeque;
     use std::ptr::NonNull;
+
+    struct LevelIterator<'a, K, V> {
+        btree: &'a BPlusTree<K, V>,
+        queue: VecDeque<NonNull<Node<K, V>>>,
+    }
+
+    impl<'a, K, V> LevelIterator<'a, K, V> {
+        fn new(btree: &'a BPlusTree<K, V>) -> LevelIterator<'a, K, V> {
+            let mut queue = VecDeque::new();
+            if let Some(root) = btree.root {
+                queue.push_front(root)
+            }
+
+            LevelIterator { btree, queue }
+        }
+
+        fn next(&mut self) -> Vec<&Node<K, V>> {
+            let mut next: VecDeque<NonNull<Node<K, V>>> = VecDeque::new();
+
+            let mut output = vec![];
+            while let Some(current_ptr) = self.queue.pop_front() {
+                let current = unsafe { current_ptr.as_ref() };
+                output.push(current);
+
+                if let Node::Internal(internal) = current {
+                    for (k, ptr) in &internal.links {
+                        next.push_back(*ptr)
+                    }
+                }
+            }
+
+            self.queue = next;
+
+            output
+        }
+    }
 
     mod bplustree {
         mod print {
@@ -1024,7 +1062,8 @@ mod tests {
         }
 
         mod remove {
-            use crate::bplustree::BPlusTree;
+            use crate::bplustree::tests::LevelIterator;
+            use crate::bplustree::{BPlusTree, Internal, Node, print_bplustree};
 
             #[test]
             fn remove_on_empty() {
@@ -1045,6 +1084,50 @@ mod tests {
                 assert_eq!(btree.remove(&0), None);
                 assert_eq!(btree.remove(&20), None);
                 assert_eq!(btree.size(), 3);
+            }
+
+            #[test]
+            fn remove_and_force_join() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
+                btree.insert(20, 4);
+
+                print_bplustree(&btree, Default::default());
+
+                btree.remove(&10);
+                btree.remove(&0);
+                btree.remove(&20);
+
+                print_bplustree(&btree, Default::default());
+            }
+
+            #[test]
+            fn remove_smallest_should_update_the_parent() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
+                btree.insert(20, 4);
+
+                let mut level_iter = LevelIterator::new(&btree);
+                let level1 = level_iter.next();
+                let root_links = &level1[0].as_internal().links;
+                assert_eq!(root_links[0].0, 0);
+                assert_eq!(root_links[1].0, 10);
+
+                print_bplustree(&btree, Default::default());
+                assert_eq!(btree.remove(&10), Some(2));
+                print_bplustree(&btree, Default::default());
+
+                let mut level_iter = LevelIterator::new(&btree);
+                let level1 = level_iter.next();
+                let root_links = &level1[0].as_internal().links;
+                assert_eq!(root_links[0].0, 0);
+                assert_eq!(root_links[1].0, 15);
             }
         }
 
