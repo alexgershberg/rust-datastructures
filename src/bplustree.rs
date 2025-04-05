@@ -237,7 +237,7 @@ where
     K: Clone + Ord + Debug,
     V: Ord + Debug,
 {
-    fn new(order: usize) -> Self {
+    pub fn new(order: usize) -> Self {
         Self {
             order,
             root: None,
@@ -245,7 +245,7 @@ where
         }
     }
 
-    fn insert(&mut self, k: K, v: V) -> Option<V> {
+    pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         println!("btree.insert({k:?}, {v:?});");
         if self.root.is_none() {
             let mut leaf = Leaf::new();
@@ -315,15 +315,15 @@ where
         Some(current)
     }
 
-    fn remove(&mut self, k: &K) -> Option<V> {
+    pub fn remove(&mut self, k: &K) -> Option<V> {
         todo!()
     }
 
-    fn contains(&mut self, k: &K) -> bool {
-        todo!()
+    pub fn contains(&mut self, k: &K) -> bool {
+        self.find(k).is_some()
     }
 
-    fn find(&mut self, k: &K) -> Option<V> {
+    fn find(&mut self, k: &K) -> Option<&V> {
         todo!()
     }
 
@@ -409,7 +409,7 @@ impl<K, V> Drop for BPlusTree<K, V> {
     }
 }
 
-fn print_bplustree<K, V>(tree: &BPlusTree<K, V>, options: DebugOptions)
+pub fn print_bplustree<K, V>(tree: &BPlusTree<K, V>, options: DebugOptions)
 where
     K: Debug,
     V: Debug,
@@ -427,8 +427,8 @@ where
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-struct DebugOptions {
-    show_parent: bool,
+pub struct DebugOptions {
+    pub show_parent: bool,
 }
 
 unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>, options: DebugOptions)
@@ -986,13 +986,14 @@ mod tests {
             #[test]
             #[ignore = "Long and non-deterministic"]
             fn insert_random_pairs() {
-                let mut btree = BPlusTree::new(4);
-                let n = 100;
+                let mut btree = BPlusTree::new(10);
+                let n = 1_000_000;
                 for i in 0..n {
-                    let i0 = random_range(0..=50);
-                    let i1 = random_range(0..=50);
+                    let i0 = random_range(0..=1000);
+                    let i1 = random_range(0..=1000);
+                    let i2 = random_range(0..=60);
 
-                    btree.insert((i0, i1), i);
+                    btree.insert((i0, i1, i2), i);
                 }
 
                 println!();
