@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
-use std::fmt::{Debug, Formatter, Write};
-use std::ptr::{NonNull, write};
+use std::fmt::{Debug, Formatter};
+use std::ptr::NonNull;
 
 struct Node {
     children: HashMap<char, NonNull<Node>>,
@@ -60,7 +60,7 @@ impl Trie {
             let entry = children.entry(c);
             match entry {
                 Entry::Occupied(occupied) => {
-                    current = occupied.get().clone();
+                    current = *occupied.get();
                 }
                 Entry::Vacant(vacant) => {
                     let new = Node::new_non_null();
@@ -203,7 +203,7 @@ impl Drop for Trie {
             let children = &node.children;
 
             for child in children.values() {
-                stack.push(child.clone());
+                stack.push(*child);
             }
 
             let b = unsafe { Box::from_raw(ptr.as_ptr()) };

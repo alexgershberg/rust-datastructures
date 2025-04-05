@@ -3,10 +3,6 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::ptr::NonNull;
-use std::rc::Rc;
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::Duration;
 
 #[derive(Debug, Clone)]
 pub struct UnionFind<T> {
@@ -111,7 +107,7 @@ where
 
     fn internal_insert(&mut self, elem: T) -> NonNull<T> {
         let ptr = match self.values.entry(elem.clone()) {
-            Entry::Occupied(occupied) => return occupied.get().clone(),
+            Entry::Occupied(occupied) => return *occupied.get(),
             Entry::Vacant(vacant) => {
                 let ptr = unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(elem))) };
                 vacant.insert(ptr);
@@ -204,7 +200,7 @@ mod tests {
     use crate::unsafe_unionfind::{UnionFind, pretty_print};
     use std::sync::{Arc, Mutex};
     use std::thread;
-    use std::time::Duration;
+    
 
     #[test]
     fn pretty_printing() {
