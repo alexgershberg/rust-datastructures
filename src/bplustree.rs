@@ -39,8 +39,8 @@ where
         let child1 = unsafe { child1_ptr.as_mut() };
         let child2 = unsafe { child2_ptr.as_mut() };
 
-        let key1 = child1.first().unwrap();
-        let key2 = child2.first().unwrap();
+        let key1 = child1.smallest_key().unwrap();
+        let key2 = child2.smallest_key().unwrap();
 
         // assert!(key1 <= key2, "key1: {key1:?} | key2: {key2:?}");
 
@@ -155,7 +155,7 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    fn first(&self) -> Option<&K> {
+    fn smallest_key(&self) -> Option<&K> {
         match self {
             Node::Internal(internal) => {
                 let link = internal.links.get(0)?;
@@ -165,6 +165,13 @@ impl<K, V> Node<K, V> {
                 let entry = leaf.data.get(0)?;
                 Some(&entry.0)
             }
+        }
+    }
+
+    fn largest_key(&self) -> Option<&K> {
+        match self {
+            Node::Internal(internal) => internal.links.last().map(|(k, _)| k),
+            Node::Leaf(leaf) => leaf.data.last().map(|(k, _)| k),
         }
     }
 
@@ -195,6 +202,34 @@ impl<K, V> Node<K, V> {
 struct BPlusTree<K, V> {
     order: usize,
     root: Option<NonNull<Node<K, V>>>,
+    size: usize,
+}
+
+impl<K, V> BPlusTree<K, V> {
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn largest_key(&self) -> Option<&K> {
+        let current = self.root?;
+        let mut queue = VecDeque::from([current]);
+        while let Some(current) = queue.pop_front() {
+            match unsafe { current.as_ref() } {
+                Node::Internal(internal) => {
+                    let (_, ptr) = internal
+                        .links
+                        .last()
+                        .expect("An Internal node MUST have a child");
+                    queue.push_front(*ptr);
+                }
+                Node::Leaf(_) => {
+                    break;
+                }
+            }
+        }
+
+        unsafe { current.as_ref().largest_key() }
+    }
 }
 
 impl<K, V> BPlusTree<K, V>
@@ -203,17 +238,22 @@ where
     V: Ord + Debug,
 {
     fn new(order: usize) -> Self {
-        Self { order, root: None }
+        Self {
+            order,
+            root: None,
+            size: 0,
+        }
     }
 
     fn insert(&mut self, k: K, v: V) -> Option<V> {
-        // println!("btree.insert({k:?}, {v:?});");
+        println!("btree.insert({k:?}, {v:?});");
         if self.root.is_none() {
             let mut leaf = Leaf::new();
             leaf.data.push((k, v));
-
             let ptr = Box::into_raw(Box::new(Node::Leaf(leaf)));
             self.root = Some(unsafe { NonNull::new_unchecked(ptr) });
+
+            self.size = 1;
             return None;
         }
 
@@ -224,13 +264,28 @@ where
         };
 
         let entry = leaf.insert(k.clone(), v);
+
+        let new_entry = entry.is_none();
+        if new_entry {
+            self.size += 1;
+        }
+
         if let Some(mut parent_ptr) = leaf.parent {
             // Is parent's first node key value higher than what we've just inserted? Then update it.
             let parent = unsafe { parent_ptr.as_mut() };
-            let first = parent.first().unwrap(); // SAFETY: This Node is our parent, therefore it MUST have at least one value.
+            let first = parent.smallest_key().unwrap(); // SAFETY: This Node is our parent, therefore it MUST have at least one value.
             let should_update_parents_first = *first > k;
             if should_update_parents_first {
-                parent.set_first(k);
+                // Propagate first key update to all parents up (tested by: smallest_key_update_should_propagate_to_all_parents)
+                let mut queue = VecDeque::from([parent_ptr]);
+                while let Some(mut current_ptr) = queue.pop_front() {
+                    let current = unsafe { current_ptr.as_mut() };
+                    current.set_first(k.clone());
+
+                    if let Some(parent_ptr) = current.parent() {
+                        queue.push_front(parent_ptr);
+                    }
+                }
             }
         }
 
@@ -293,7 +348,7 @@ where
                     unreachable!("Leaf node cannot be a parent of another node.")
                 };
 
-                let key = new.first().unwrap();
+                let key = new.smallest_key().unwrap();
                 let index = parent
                     .links
                     .binary_search_by(|(k, _)| k.cmp(key))
@@ -364,6 +419,10 @@ where
         return;
     };
 
+    let key = tree
+        .largest_key()
+        .expect("If a tree is not empty, it's guaranteed to have at least a single value");
+
     unsafe { print_node(root, options) };
 }
 
@@ -377,10 +436,11 @@ where
     K: Debug,
     V: Debug,
 {
+    let key_length = 4;
     let mut stack = VecDeque::from([(None, 0, false, ptr, -1)]);
     while let Some((k, mut offset, ignore_offset, current, lvl)) = stack.pop_front() {
         if let Some(key) = k {
-            let line = format!("{key:4?}  ->  ");
+            let line = format!("{key:key_length$?}  ->  ");
             offset += line.chars().count();
             let mut offset = offset;
             if ignore_offset {
@@ -412,9 +472,9 @@ where
                         } else {
                             "No parent".to_string()
                         };
-                        format!("({}) {k:4?}: {v:4?}", formatted_ptr)
+                        format!("({}) {k:key_length$?}: {v:key_length$?}", formatted_ptr)
                     } else {
-                        format!("{k:4?}: {v:4?}")
+                        format!("{k:key_length$?}: {v:key_length$?}")
                     };
 
                     let mut offset = offset + line.chars().count();
@@ -476,7 +536,6 @@ mod tests {
 
     mod bplustree {
         use crate::bplustree::{BPlusTree, DebugOptions, Node, print_bplustree};
-        use rand::random_range;
 
         mod print {
             use crate::bplustree::{BPlusTree, print_bplustree};
@@ -704,6 +763,82 @@ mod tests {
         }
 
         #[test]
+        fn smallest_key_update_should_propagate_to_all_parents() {
+            let mut btree = BPlusTree::new(4);
+            let args = [
+                (191, 0),
+                (173, 1),
+                (143, 2),
+                (158, 3),
+                (45, 4),
+                (133, 5),
+                (76, 6),
+                (95, 7),
+                (31, 8),
+                (134, 9),
+                (118, 10),
+                (17, 11),
+                (20, 12),
+                (74, 13),
+            ];
+
+            for (k, v) in args {
+                btree.insert(k, v);
+            }
+
+            /*
+             17  ->    17  ->    17:   11
+                                 20:   12
+
+                       31  ->    31:    8
+                                 45:    4
+                                 74:   13
+                                 76:    6
+
+             95  ->    95  ->    95:    7
+                                118:   10
+
+                      133  ->   133:    5
+                                134:    9
+                                143:    2
+
+                      158  ->   158:    3
+                                173:    1
+                                191:    0
+            */
+
+            let root = unsafe { btree.root.unwrap().as_ref() };
+            assert_eq!(root.smallest_key(), Some(&17));
+
+            btree.insert(2, 14);
+
+            /*
+               2  ->    2  ->      2:   14
+                                  17:   11
+                                  20:   12
+
+                        31  ->    31:    8
+                                  45:    4
+                                  74:   13
+                                  76:    6
+
+              95  ->    95  ->    95:    7
+                                 118:   10
+
+                       133  ->   133:    5
+                                 134:    9
+                                 143:    2
+
+                       158  ->   158:    3
+                                 173:    1
+                                 191:    0
+            */
+
+            let root = unsafe { btree.root.unwrap().as_ref() };
+            assert_eq!(root.smallest_key(), Some(&2));
+        }
+
+        #[test]
         fn parent_of_adjacent_nodes_is_updated_correctly_after_split() {
             let mut btree = BPlusTree::new(4);
             let options = DebugOptions { show_parent: false };
@@ -821,18 +956,50 @@ mod tests {
             assert_ne!(leaf1.parent(), leaf2.parent());
         }
 
-        #[test]
-        fn insert_values_at_random() {
-            let mut btree = BPlusTree::new(250);
-            let n = 10_000_000;
-            for i in 0..n {
-                let r = random_range(0..n);
-                btree.insert((12345, r), i);
+        mod fuzz {
+            use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
+            use rand::random_range;
+
+            #[test]
+            #[ignore = "Long and non-deterministic"]
+            fn insert_random_strings() {
+                let mut btree = BPlusTree::new(4);
+                let n = 100;
+                for i in 0..n {
+                    let r0 = random_range(b'A'..=b'Z') as char;
+                    let r1 = random_range(b'A'..=b'Z') as char;
+                    let r2 = random_range(b'A'..=b'Z') as char;
+                    let r3 = random_range(b'A'..=b'Z') as char;
+                    let r4 = random_range(b'A'..=b'Z') as char;
+                    let r5 = random_range(b'A'..=b'Z') as char;
+                    let r6 = random_range(b'A'..=b'Z') as char;
+
+                    btree.insert(format!("{r0}{r1}{r2}{r3}{r4}{r5}{r6}"), i);
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions { show_parent: false });
+                println!();
+                println!("size: {}", btree.size());
             }
 
-            println!();
-            print_bplustree(&btree, DebugOptions { show_parent: false });
-            println!()
+            #[test]
+            #[ignore = "Long and non-deterministic"]
+            fn insert_random_pairs() {
+                let mut btree = BPlusTree::new(4);
+                let n = 100;
+                for i in 0..n {
+                    let i0 = random_range(0..=50);
+                    let i1 = random_range(0..=50);
+
+                    btree.insert((i0, i1), i);
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions { show_parent: false });
+                println!();
+                println!("size: {}", btree.size());
+            }
         }
 
         #[test]
