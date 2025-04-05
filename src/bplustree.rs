@@ -1,6 +1,5 @@
 use std::collections::VecDeque;
 use std::fmt::{Debug, Pointer};
-use std::mem;
 use std::mem::swap;
 use std::ptr::NonNull;
 
@@ -42,7 +41,7 @@ where
         let key1 = child1.smallest_key().unwrap();
         let key2 = child2.smallest_key().unwrap();
 
-        // assert!(key1 <= key2, "key1: {key1:?} | key2: {key2:?}");
+        debug_assert!(key1 <= key2, "key1: {key1:?} | key2: {key2:?}");
 
         let internal_node = Node::Internal(Internal {
             parent: None,
@@ -66,7 +65,7 @@ where
     K: Ord,
 {
     fn find(&self, k: &K) -> NonNull<Node<K, V>> {
-        assert!(
+        debug_assert!(
             !self.links.is_empty(),
             "An internal Node must have children"
         );
@@ -96,7 +95,7 @@ impl<K, V> Leaf<K, V> {
 
     fn split(&mut self) -> NonNull<Node<K, V>> {
         let right = self.data.split_off(self.data.len() / 2);
-        assert!(self.data.len() <= right.len());
+        debug_assert!(self.data.len() <= right.len());
 
         unsafe {
             NonNull::new_unchecked(Box::into_raw(Box::new(Node::Leaf(Leaf {
