@@ -245,18 +245,18 @@ impl<K, V> Node<K, V> {
 }
 
 #[derive(Debug)]
-struct BPlusTree<K, V> {
+pub struct BPlusTree<K, V> {
     order: usize,
     root: Option<NonNull<Node<K, V>>>,
     size: usize,
 }
 
 impl<K, V> BPlusTree<K, V> {
-    fn size(&self) -> usize {
+    pub fn size(&self) -> usize {
         self.size
     }
 
-    fn largest_key(&self) -> Option<&K> {
+    pub fn largest_key(&self) -> Option<&K> {
         let current = self.root?;
         let mut queue = VecDeque::from([current]);
         while let Some(current) = queue.pop_front() {
@@ -380,7 +380,7 @@ where
         self.find(k).is_some()
     }
 
-    fn find(&mut self, k: &K) -> Option<&V> {
+    pub fn find(&mut self, k: &K) -> Option<&V> {
         todo!()
     }
 
