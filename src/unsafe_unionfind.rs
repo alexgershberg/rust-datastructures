@@ -200,7 +200,6 @@ mod tests {
     use crate::unsafe_unionfind::{UnionFind, pretty_print};
     use std::sync::{Arc, Mutex};
     use std::thread;
-    
 
     #[test]
     fn pretty_printing() {
