@@ -128,6 +128,17 @@ where
             }
         }
     }
+
+    fn remove(&mut self, k: &K) -> Option<V> {
+        let result = self.data.binary_search_by(|(key, _)| key.cmp(&k));
+        match result {
+            Ok(index) => {
+                let (k, v) = self.data.remove(index);
+                Some(v)
+            }
+            Err(index) => None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -195,6 +206,42 @@ impl<K, V> Node<K, V> {
             Node::Leaf(leaf) => leaf.size(),
         }
     }
+
+    fn as_internal(&self) -> &Internal<K, V> {
+        match self {
+            Node::Internal(internal) => internal,
+            Node::Leaf(_leaf) => {
+                panic!("Expected an Internal node but got Leaf")
+            }
+        }
+    }
+
+    fn as_internal_mut(&mut self) -> &mut Internal<K, V> {
+        match self {
+            Node::Internal(internal) => internal,
+            Node::Leaf(_leaf) => {
+                panic!("Expected an Internal node but got Leaf")
+            }
+        }
+    }
+
+    fn as_leaf(&self) -> &Leaf<K, V> {
+        match self {
+            Node::Internal(_internal) => {
+                panic!("Expected a Leaf node but got Internal")
+            }
+            Node::Leaf(leaf) => leaf,
+        }
+    }
+
+    fn as_leaf_mut(&mut self) -> &mut Leaf<K, V> {
+        match self {
+            Node::Internal(_internal) => {
+                panic!("Expected a Leaf node but got Internal")
+            }
+            Node::Leaf(leaf) => leaf,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -248,7 +295,7 @@ where
         println!("btree.insert({k:?}, {v:?});");
         if self.root.is_none() {
             let mut leaf = Leaf::new();
-            leaf.data.push((k, v));
+            leaf.insert(k, v);
             let ptr = Box::into_raw(Box::new(Node::Leaf(leaf)));
             self.root = Some(unsafe { NonNull::new_unchecked(ptr) });
 
@@ -315,7 +362,18 @@ where
     }
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
-        todo!()
+        println!("btree.remove(&{k:?});");
+        let leaf = unsafe { self.find_leaf_node(k)?.as_mut().as_leaf_mut() };
+        let value = leaf.remove(k);
+        if value.is_some() {
+            self.size -= 1;
+        }
+
+        if leaf.size() < self.min_node_size() {
+            todo!()
+        }
+
+        value
     }
 
     pub fn contains(&mut self, k: &K) -> bool {
@@ -328,6 +386,10 @@ where
 
     fn max_node_size(&self) -> usize {
         self.order // This BPlusTree is slightly different, each ENTRY in internal node points to a child, not the LINKS between entries
+    }
+
+    fn min_node_size(&self) -> usize {
+        self.order / 2
     }
 
     unsafe fn insert_into_parent_node(
@@ -538,8 +600,6 @@ mod tests {
     use std::ptr::NonNull;
 
     mod bplustree {
-        use crate::bplustree::{BPlusTree, DebugOptions, Node, print_bplustree};
-
         mod print {
             use crate::bplustree::{BPlusTree, print_bplustree};
 
@@ -572,391 +632,420 @@ mod tests {
             }
         }
 
-        #[test]
-        fn insert_single_value() {
-            let mut btree = BPlusTree::new(4);
-            assert_eq!(btree.insert((12345, 1), 0), None);
-        }
+        mod insert {
+            use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
 
-        #[test]
-        fn insert_multiple_values() {
-            let mut btree = BPlusTree::new(4);
-            let options = Default::default();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 0), 0);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 5), 1);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 10), 2);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 15), 3);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-        }
-
-        #[test]
-        fn insert_a_lot_of_values() {
-            let mut btree = BPlusTree::new(4);
-            let options = Default::default();
-            btree.insert((12345, 0), 0);
-            println!();
-            print_bplustree(&btree, options);
-
-            btree.insert((12345, 5), 1);
-            println!();
-            print_bplustree(&btree, options);
-
-            btree.insert((12345, 10), 2);
-            println!();
-            print_bplustree(&btree, options);
-
-            btree.insert((12345, 15), 3);
-            println!();
-            print_bplustree(&btree, options);
-
-            btree.insert((12345, 20), 4);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 25), 5);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 11), 6);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 35), 7);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 40), 8);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 45), 9);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 50), 10);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 55), 11);
-            print_bplustree(&btree, options);
-            println!();
-        }
-
-        #[test]
-        fn updating_parent_to_smaller_value_on_regular_insert_1() {
-            /*
-
-            (12345,   32)  ->  (12345,   32):    2
-                               (12345,   33):    1
-                               (12345,   57):    5
-
-            (12345,   78)  ->  (12345,   78):    0
-                               (12345,   91):    4
-                               (12345,   93):    3
-                               (12345,   97):    6
-
-            Insert((12345,   13):    7)
-
-            Where should this insert go?
-
-            I think into (12345, 32) and update the parent to (12345, 13)
-
-            */
-
-            let mut btree = BPlusTree::new(4);
-            let options = Default::default();
-            btree.insert((12345, 78), 0);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 33), 1);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 32), 2);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 93), 3);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 91), 4);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 57), 5);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 97), 6);
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 13), 7);
-            print_bplustree(&btree, options);
-            println!();
-        }
-
-        #[test]
-        fn updating_parent_to_smaller_value_on_regular_insert_2() {
-            let mut btree = BPlusTree::new(4);
-            let options = Default::default();
-            btree.insert((12345, 78), 0);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 33), 1);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 32), 2);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 93), 3);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 91), 4);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 57), 5);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 97), 6);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 13), 7);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 10), 8);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-        }
-
-        #[test]
-        fn smallest_key_update_should_propagate_to_all_parents() {
-            let mut btree = BPlusTree::new(4);
-            let args = [
-                (191, 0),
-                (173, 1),
-                (143, 2),
-                (158, 3),
-                (45, 4),
-                (133, 5),
-                (76, 6),
-                (95, 7),
-                (31, 8),
-                (134, 9),
-                (118, 10),
-                (17, 11),
-                (20, 12),
-                (74, 13),
-            ];
-
-            for (k, v) in args {
-                btree.insert(k, v);
+            #[test]
+            fn insert_single_value() {
+                let mut btree = BPlusTree::new(4);
+                assert_eq!(btree.insert((12345, 1), 0), None);
             }
 
-            /*
-             17  ->    17  ->    17:   11
-                                 20:   12
+            #[test]
+            fn insert_multiple_values() {
+                let mut btree = BPlusTree::new(4);
+                let options = Default::default();
+                print_bplustree(&btree, options);
+                println!();
 
-                       31  ->    31:    8
-                                 45:    4
-                                 74:   13
-                                 76:    6
+                btree.insert((12345, 0), 0);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
 
-             95  ->    95  ->    95:    7
-                                118:   10
+                btree.insert((12345, 5), 1);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
 
-                      133  ->   133:    5
-                                134:    9
-                                143:    2
+                btree.insert((12345, 10), 2);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
 
-                      158  ->   158:    3
-                                173:    1
-                                191:    0
-            */
+                btree.insert((12345, 15), 3);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+            }
 
-            let root = unsafe { btree.root.unwrap().as_ref() };
-            assert_eq!(root.smallest_key(), Some(&17));
+            #[test]
+            fn insert_a_lot_of_values() {
+                let mut btree = BPlusTree::new(4);
+                let options = Default::default();
+                btree.insert((12345, 0), 0);
+                println!();
+                print_bplustree(&btree, options);
 
-            btree.insert(2, 14);
+                btree.insert((12345, 5), 1);
+                println!();
+                print_bplustree(&btree, options);
 
-            /*
-               2  ->    2  ->      2:   14
-                                  17:   11
-                                  20:   12
+                btree.insert((12345, 10), 2);
+                println!();
+                print_bplustree(&btree, options);
 
-                        31  ->    31:    8
-                                  45:    4
-                                  74:   13
-                                  76:    6
+                btree.insert((12345, 15), 3);
+                println!();
+                print_bplustree(&btree, options);
 
-              95  ->    95  ->    95:    7
-                                 118:   10
+                btree.insert((12345, 20), 4);
+                print_bplustree(&btree, options);
+                println!();
 
-                       133  ->   133:    5
-                                 134:    9
-                                 143:    2
+                btree.insert((12345, 25), 5);
+                print_bplustree(&btree, options);
+                println!();
 
-                       158  ->   158:    3
-                                 173:    1
-                                 191:    0
-            */
+                btree.insert((12345, 11), 6);
+                print_bplustree(&btree, options);
+                println!();
 
-            let root = unsafe { btree.root.unwrap().as_ref() };
-            assert_eq!(root.smallest_key(), Some(&2));
+                btree.insert((12345, 35), 7);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 40), 8);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 45), 9);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 50), 10);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 55), 11);
+                print_bplustree(&btree, options);
+                println!();
+            }
+
+            #[test]
+            fn updating_parent_to_smaller_value_on_regular_insert_1() {
+                /*
+
+                (12345,   32)  ->  (12345,   32):    2
+                                   (12345,   33):    1
+                                   (12345,   57):    5
+
+                (12345,   78)  ->  (12345,   78):    0
+                                   (12345,   91):    4
+                                   (12345,   93):    3
+                                   (12345,   97):    6
+
+                Insert((12345,   13):    7)
+
+                Where should this insert go?
+
+                I think into (12345, 32) and update the parent to (12345, 13)
+
+                */
+
+                let mut btree = BPlusTree::new(4);
+                let options = Default::default();
+                btree.insert((12345, 78), 0);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 33), 1);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 32), 2);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 93), 3);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 91), 4);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 57), 5);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 97), 6);
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 13), 7);
+                print_bplustree(&btree, options);
+                println!();
+            }
+
+            #[test]
+            fn updating_parent_to_smaller_value_on_regular_insert_2() {
+                let mut btree = BPlusTree::new(4);
+                let options = Default::default();
+                btree.insert((12345, 78), 0);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 33), 1);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 32), 2);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 93), 3);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 91), 4);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 57), 5);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 97), 6);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 13), 7);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 10), 8);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+            }
+
+            #[test]
+            fn smallest_key_update_should_propagate_to_all_parents() {
+                let mut btree = BPlusTree::new(4);
+                let args = [
+                    (191, 0),
+                    (173, 1),
+                    (143, 2),
+                    (158, 3),
+                    (45, 4),
+                    (133, 5),
+                    (76, 6),
+                    (95, 7),
+                    (31, 8),
+                    (134, 9),
+                    (118, 10),
+                    (17, 11),
+                    (20, 12),
+                    (74, 13),
+                ];
+
+                for (k, v) in args {
+                    btree.insert(k, v);
+                }
+
+                /*
+                 17  ->    17  ->    17:   11
+                                     20:   12
+
+                           31  ->    31:    8
+                                     45:    4
+                                     74:   13
+                                     76:    6
+
+                 95  ->    95  ->    95:    7
+                                    118:   10
+
+                          133  ->   133:    5
+                                    134:    9
+                                    143:    2
+
+                          158  ->   158:    3
+                                    173:    1
+                                    191:    0
+                */
+
+                let root = unsafe { btree.root.unwrap().as_ref() };
+                assert_eq!(root.smallest_key(), Some(&17));
+
+                btree.insert(2, 14);
+
+                /*
+                   2  ->    2  ->      2:   14
+                                      17:   11
+                                      20:   12
+
+                            31  ->    31:    8
+                                      45:    4
+                                      74:   13
+                                      76:    6
+
+                  95  ->    95  ->    95:    7
+                                     118:   10
+
+                           133  ->   133:    5
+                                     134:    9
+                                     143:    2
+
+                           158  ->   158:    3
+                                     173:    1
+                                     191:    0
+                */
+
+                let root = unsafe { btree.root.unwrap().as_ref() };
+                assert_eq!(root.smallest_key(), Some(&2));
+            }
+
+            #[test]
+            fn parent_of_adjacent_nodes_is_updated_correctly_after_split() {
+                let mut btree = BPlusTree::new(4);
+                let options = DebugOptions::default();
+                btree.insert((12345, 4), 0);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 14), 1);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 6), 2);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 36), 3);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 7), 4);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 51), 5);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 12), 6);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 48), 7);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 50), 8);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 14), 9);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 42), 10);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 4), 11);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 18), 12);
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                /*
+                 (12345,    4)  ->  (12345,    4):   11
+                                    (12345,    6):    2
+
+                 (12345,    7)  ->  (12345,    7):    4
+                                    (12345,   12):    6
+
+                 (12345,   14)  ->  (12345,   14):    9
+                                    (12345,   18):   12
+                                    (12345,   36):    3
+                                    (12345,   42):   10
+
+                 (12345,   48)  ->  (12345,   48):    7
+                                    (12345,   50):    8
+                                    (12345,   51):    5
+                */
+
+                let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
+                let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
+                assert_eq!(leaf1.parent(), leaf2.parent());
+
+                btree.insert((12345, 22), 13);
+                println!();
+                print_bplustree(&btree, DebugOptions { show_parent: true });
+                println!();
+
+                /*
+                 (12345,    4)  ->  (12345,    4)  ->  (12345,    4):   11
+                                                       (12345,    6):    2
+
+                                    (12345,    7)  ->  (12345,    7):    4
+                                                       (12345,   12):    6
+
+                 (12345,   14)  ->  (12345,   14)  ->  (12345,   14):    9
+                                                       (12345,   18):   12
+
+                                    (12345,   22)  ->  (12345,   22):   13
+                                                       (12345,   36):    3
+                                                       (12345,   42):   10
+
+                                    (12345,   48)  ->  (12345,   48):    7
+                                                       (12345,   50):    8
+                */
+
+                let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
+                let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
+                assert_ne!(leaf1.parent(), leaf2.parent());
+            }
         }
 
-        #[test]
-        fn parent_of_adjacent_nodes_is_updated_correctly_after_split() {
-            let mut btree = BPlusTree::new(4);
-            let options = DebugOptions { show_parent: false };
-            btree.insert((12345, 4), 0);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
+        mod remove {
+            use crate::bplustree::BPlusTree;
 
-            btree.insert((12345, 14), 1);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
+            #[test]
+            fn remove_on_empty() {
+                let mut btree: BPlusTree<i32, i32> = BPlusTree::new(4);
 
-            btree.insert((12345, 6), 2);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
+                assert_eq!(btree.remove(&0), None);
+            }
 
-            btree.insert((12345, 36), 3);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
+            #[test]
+            fn remove_1() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
 
-            btree.insert((12345, 7), 4);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 51), 5);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 12), 6);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 48), 7);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 50), 8);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 14), 9);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 42), 10);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 4), 11);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            btree.insert((12345, 18), 12);
-            println!();
-            print_bplustree(&btree, options);
-            println!();
-
-            /*
-             (12345,    4)  ->  (12345,    4):   11
-                                (12345,    6):    2
-
-             (12345,    7)  ->  (12345,    7):    4
-                                (12345,   12):    6
-
-             (12345,   14)  ->  (12345,   14):    9
-                                (12345,   18):   12
-                                (12345,   36):    3
-                                (12345,   42):   10
-
-             (12345,   48)  ->  (12345,   48):    7
-                                (12345,   50):    8
-                                (12345,   51):    5
-            */
-
-            let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
-            let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
-            assert_eq!(leaf1.parent(), leaf2.parent());
-
-            btree.insert((12345, 22), 13);
-            println!();
-            print_bplustree(&btree, DebugOptions { show_parent: true });
-            println!();
-
-            /*
-             (12345,    4)  ->  (12345,    4)  ->  (12345,    4):   11
-                                                   (12345,    6):    2
-
-                                (12345,    7)  ->  (12345,    7):    4
-                                                   (12345,   12):    6
-
-             (12345,   14)  ->  (12345,   14)  ->  (12345,   14):    9
-                                                   (12345,   18):   12
-
-                                (12345,   22)  ->  (12345,   22):   13
-                                                   (12345,   36):    3
-                                                   (12345,   42):   10
-
-                                (12345,   48)  ->  (12345,   48):    7
-                                                   (12345,   50):    8
-            */
-
-            let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
-            let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
-            assert_ne!(leaf1.parent(), leaf2.parent());
+                assert_eq!(btree.remove(&0), Some(0));
+                assert_eq!(btree.remove(&0), None);
+                assert_eq!(btree.remove(&20), None);
+                assert_eq!(btree.size(), 3);
+            }
         }
 
         mod fuzz {
@@ -1006,28 +1095,32 @@ mod tests {
             }
         }
 
-        #[test]
-        fn find_leaf_node_1() {
-            let mut btree = BPlusTree::new(4);
-            btree.insert((12345, 1), 0);
-            let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
-            let Node::Leaf(leaf) = node else {
-                unreachable!()
-            };
-            assert_eq!(leaf.data[0], ((12345, 1), 0));
-        }
+        mod find {
+            use crate::bplustree::{BPlusTree, Node};
 
-        #[test]
-        fn find_leaf_node_2() {
-            let mut btree = BPlusTree::new(4);
-            btree.insert((12345, 1), 0);
-            btree.insert((12345, 3), 1);
-            btree.insert((12345, 5), 2);
-            let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
-            let Node::Leaf(leaf) = node else {
-                unreachable!()
-            };
-            assert_eq!(leaf.data[0], ((12345, 1), 0));
+            #[test]
+            fn find_leaf_node_1() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert((12345, 1), 0);
+                let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
+                let Node::Leaf(leaf) = node else {
+                    unreachable!()
+                };
+                assert_eq!(leaf.data[0], ((12345, 1), 0));
+            }
+
+            #[test]
+            fn find_leaf_node_2() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert((12345, 1), 0);
+                btree.insert((12345, 3), 1);
+                btree.insert((12345, 5), 2);
+                let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
+                let Node::Leaf(leaf) = node else {
+                    unreachable!()
+                };
+                assert_eq!(leaf.data[0], ((12345, 1), 0));
+            }
         }
     }
 
