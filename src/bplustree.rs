@@ -96,6 +96,35 @@ where
 
         &mut self.links[index]
     }
+
+    fn left(&self, k: &K) -> Option<&K> {
+        let mut index = match self.links.binary_search_by(|(key, _)| key.cmp(k)) {
+            Ok(index) => index,
+            Err(index) => index,
+        };
+
+        if index == 0 {
+            return None;
+        }
+
+        index -= 1;
+
+        Some(&self.links[index].0)
+    }
+
+    fn right(&self, k: &K) -> Option<&K> {
+        let index = self.links.binary_search_by(|(key, _)| key.cmp(k));
+        if index.unwrap_or_else(|index| index) >= (self.links.len() - 1) {
+            return None;
+        }
+
+        let index: usize = match index {
+            Ok(index) => index + 1,
+            Err(index) => index,
+        };
+
+        Some(&self.links[index].0)
+    }
 }
 
 #[derive(Debug)]
@@ -132,6 +161,10 @@ impl<K, V> Leaf<K, V> {
         let entry = self.data.first()?;
         Some(&entry.0)
     }
+
+    fn is_root(&self) -> bool {
+        self.parent.is_none()
+    }
 }
 
 impl<K, V> Leaf<K, V>
@@ -154,7 +187,7 @@ where
     }
 
     fn remove(&mut self, k: &K) -> Option<V> {
-        let result = self.data.binary_search_by(|(key, _)| key.cmp(&k));
+        let result = self.data.binary_search_by(|(key, _)| key.cmp(k));
         match result {
             Ok(index) => {
                 let (k, v) = self.data.remove(index);
@@ -277,6 +310,24 @@ where
             }
         }
     }
+
+    fn left(&self, k: &K) -> Option<&K> {
+        match self {
+            Node::Internal(internal) => internal.left(k),
+            Node::Leaf(leaf) => {
+                todo!()
+            }
+        }
+    }
+
+    fn right(&self, k: &K) -> Option<&K> {
+        match self {
+            Node::Internal(internal) => internal.left(k),
+            Node::Leaf(leaf) => {
+                todo!()
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -394,6 +445,19 @@ where
             self.size -= 1;
         }
 
+        if self.size == 0 {
+            let root = self
+                .root
+                .expect("Size shrunk to 0, there MUST have been a root node before");
+            let _ = unsafe { Box::from_raw(root.as_ptr()) };
+            self.root = None;
+            return value;
+        }
+
+        if leaf.is_root() {
+            return value;
+        }
+
         let mut need_to_recursively_update_parents = false;
         if let Some(smallest_key) = leaf.smallest_key() {
             if k < smallest_key {
@@ -405,10 +469,11 @@ where
             unsafe { self.update_parent_key(node_ptr) };
         }
 
-        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() }; // Miri Stacked Borrows rule violation without this line
-        if leaf.size() < self.min_node_size() {
+        let size = unsafe { node_ptr.as_ref().size() }; // Miri Stacked Borrows rule violation without this line
+        if size < self.min_node_size() {
             print_bplustree(self, DebugOptions::default());
-            todo!()
+
+            unsafe { self.merge_with_neightbour(node_ptr) };
         }
 
         value
@@ -484,6 +549,56 @@ where
             let parent_ptr = unsafe { Internal::new_with_children(old_ptr, new_ptr) };
             self.root = Some(parent_ptr);
         }
+    }
+
+    /*
+
+      (0:   0)
+      (5:   1)
+      (10:  2)
+      (15:  3)
+
+    Insert(20, 4)
+
+      (0)  ->  (0:   0)
+               (5:   1)
+
+      (10) ->  (10:  2)
+               (15:  3)
+               (20:  4)
+
+    Remove(0)
+
+                        LEFT
+
+      (5)  ->  (5:   1)
+
+      (10) ->  (10:  2) RIGHT
+               (15:  3)
+               (20:  4)
+
+
+      Can't take one from left,
+      Can take one from Right
+
+      (5)  ->  (5:   1)
+               (10:  2)
+
+      (15) ->  (15:  3)
+               (20:  4)
+
+      */
+
+    unsafe fn merge_with_neightbour(&self, node: NonNull<Node<K, V>>) {
+        let parent = node
+            .as_ref()
+            .parent()
+            .expect("We should only be doing this on nodes with parent");
+
+        let can_take_from_left = false;
+        let can_take_from_right = false;
+
+        todo!()
     }
 
     unsafe fn update_parent_smallest_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
@@ -1130,7 +1245,7 @@ mod tests {
 
         mod remove {
             use crate::bplustree::tests::LevelIterator;
-            use crate::bplustree::{BPlusTree, Internal, Node, print_bplustree};
+            use crate::bplustree::{BPlusTree, Internal, Node, print_bplustree, print_ptr};
 
             #[test]
             fn remove_on_empty() {
@@ -1154,7 +1269,37 @@ mod tests {
             }
 
             #[test]
-            fn remove_and_force_join() {
+            fn insert_and_remove_single_value() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                assert_eq!(btree.remove(&0), Some(0));
+                assert_eq!(btree.remove(&0), None);
+
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+                assert!(level1.is_empty());
+            }
+
+            #[test]
+            fn insert_two_remove_one() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 0);
+                assert_eq!(btree.remove(&0), Some(0));
+
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+
+                assert_eq!(level1.len(), 1);
+
+                let root = level1[0].as_leaf();
+
+                assert_eq!(root.data[0], (5, 0));
+                assert!(iter.next().is_empty());
+            }
+
+            #[test]
+            fn remove_and_force_merge_1() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
                 btree.insert(5, 1);
@@ -1165,10 +1310,40 @@ mod tests {
                 print_bplustree(&btree, Default::default());
 
                 btree.remove(&10);
-                btree.remove(&0);
-                btree.remove(&20);
 
                 print_bplustree(&btree, Default::default());
+
+                btree.remove(&0);
+
+                print_bplustree(&btree, Default::default());
+
+                // btree.remove(&20);
+
+                // print_bplustree(&btree, Default::default());
+            }
+
+            #[test]
+            fn remove_and_force_merge_2() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
+                btree.insert(20, 4);
+
+                print_bplustree(&btree, Default::default());
+
+                btree.remove(&10);
+
+                print_bplustree(&btree, Default::default());
+
+                btree.remove(&15);
+
+                print_bplustree(&btree, Default::default());
+
+                // btree.remove(&20);
+
+                // print_bplustree(&btree, Default::default());
             }
 
             #[test]
@@ -1315,6 +1490,88 @@ mod tests {
 
             let (_, node) = *internal.find(&(12345, 8));
             assert_eq!(node, leaf2);
+
+            unsafe {
+                cleanup_leaf(leaf1);
+                cleanup_leaf(leaf2);
+                cleanup_leaf(leaf3);
+                cleanup_leaf(leaf4);
+                cleanup_leaf(leaf5);
+                cleanup_leaf(leaf6);
+            }
+        }
+
+        #[test]
+        fn left_1() {
+            let leaf1 = create_leaf(0, 0);
+            let leaf2 = create_leaf(5, 1);
+            let leaf3 = create_leaf(10, 2);
+            let leaf4 = create_leaf(15, 3);
+            let leaf5 = create_leaf(20, 4);
+            let leaf6 = create_leaf(25, 5);
+
+            let internal = Internal {
+                parent: None,
+                links: vec![
+                    (0, leaf1),
+                    (5, leaf2),
+                    (10, leaf3),
+                    (15, leaf4),
+                    (20, leaf5),
+                    (25, leaf6),
+                ],
+            };
+
+            assert_eq!(internal.left(&-1), None);
+            assert_eq!(internal.left(&0), None);
+            assert_eq!(internal.left(&2), Some(&0));
+            assert_eq!(internal.left(&3), Some(&0));
+            assert_eq!(internal.left(&4), Some(&0));
+            assert_eq!(internal.left(&5), Some(&0));
+            assert_eq!(internal.left(&10), Some(&5));
+            assert_eq!(internal.left(&25), Some(&20));
+            assert_eq!(internal.left(&30), Some(&25));
+
+            unsafe {
+                cleanup_leaf(leaf1);
+                cleanup_leaf(leaf2);
+                cleanup_leaf(leaf3);
+                cleanup_leaf(leaf4);
+                cleanup_leaf(leaf5);
+                cleanup_leaf(leaf6);
+            }
+        }
+
+        #[test]
+        fn right_1() {
+            let leaf1 = create_leaf(0, 0);
+            let leaf2 = create_leaf(5, 1);
+            let leaf3 = create_leaf(10, 2);
+            let leaf4 = create_leaf(15, 3);
+            let leaf5 = create_leaf(20, 4);
+            let leaf6 = create_leaf(25, 5);
+
+            let internal = Internal {
+                parent: None,
+                links: vec![
+                    (0, leaf1),
+                    (5, leaf2),
+                    (10, leaf3),
+                    (15, leaf4),
+                    (20, leaf5),
+                    (25, leaf6),
+                ],
+            };
+
+            assert_eq!(internal.right(&-1), Some(&0));
+            assert_eq!(internal.right(&0), Some(&5));
+            assert_eq!(internal.right(&2), Some(&5));
+            assert_eq!(internal.right(&3), Some(&5));
+            assert_eq!(internal.right(&4), Some(&5));
+            assert_eq!(internal.right(&5), Some(&10));
+            assert_eq!(internal.right(&10), Some(&15));
+            assert_eq!(internal.right(&25), None);
+            assert_eq!(internal.right(&30), None);
 
             unsafe {
                 cleanup_leaf(leaf1);
