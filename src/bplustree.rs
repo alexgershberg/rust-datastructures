@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::fmt::{Debug, Pointer};
+use std::fmt::Debug;
 use std::mem::swap;
 use std::ptr::NonNull;
 
@@ -157,11 +157,11 @@ impl<K, V> Node<K, V> {
     fn smallest_key(&self) -> Option<&K> {
         match self {
             Node::Internal(internal) => {
-                let link = internal.links.get(0)?;
+                let link = internal.links.first()?;
                 Some(&link.0)
             }
             Node::Leaf(leaf) => {
-                let entry = leaf.data.get(0)?;
+                let entry = leaf.data.first()?;
                 Some(&entry.0)
             }
         }
@@ -499,23 +499,25 @@ where
     K: Debug,
     V: Debug,
 {
-    let n = &*ptr.as_ptr();
-    match n {
-        Node::Internal(internal) => {
-            format!(
-                "({ptr:p}): {:?}",
-                internal
-                    .links
-                    .iter()
-                    .map(|(k, v)| { k })
-                    .collect::<Vec<_>>()
-            )
-        }
-        Node::Leaf(leaf) => {
-            format!(
-                "({ptr:p}): {:?}",
-                leaf.data.iter().map(|(k, v)| { k }).collect::<Vec<_>>()
-            )
+    unsafe {
+        let n = &*ptr.as_ptr();
+        match n {
+            Node::Internal(internal) => {
+                format!(
+                    "({ptr:p}): {:?}",
+                    internal
+                        .links
+                        .iter()
+                        .map(|(k, v)| { k })
+                        .collect::<Vec<_>>()
+                )
+            }
+            Node::Leaf(leaf) => {
+                format!(
+                    "({ptr:p}): {:?}",
+                    leaf.data.iter().map(|(k, v)| { k }).collect::<Vec<_>>()
+                )
+            }
         }
     }
 }
@@ -525,7 +527,9 @@ where
     K: Debug,
     V: Debug,
 {
-    println!("{}", format_ptr(ptr));
+    unsafe {
+        println!("{}", format_ptr(ptr));
+    }
 }
 
 #[cfg(test)]
@@ -1036,7 +1040,9 @@ mod tests {
     }
 
     unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
-        let _ = Box::from_raw(ptr.as_ptr());
+        unsafe {
+            let _ = Box::from_raw(ptr.as_ptr());
+        }
     }
 
     mod internal {
@@ -1105,7 +1111,7 @@ mod tests {
 
     #[test]
     fn search() {
-        let v = vec![
+        let v = [
             ((1234, 0), 0),
             ((1234, 5), 1),
             ((1234, 10), 2),
