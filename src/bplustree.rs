@@ -460,18 +460,14 @@ impl<K, V> Node<K, V> {
 
     fn remove_smallest_entry(&mut self) -> NodeEntry<K, V> {
         match self {
-            Node::Internal(internal) => {
-                todo!()
-            }
+            Node::Internal(internal) => NodeEntry::Internal(internal.remove_smallest_entry()),
             Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_smallest_entry()),
         }
     }
 
     fn insert_largest_entry(&mut self, e: NodeEntry<K, V>) {
         match (self, e) {
-            (Node::Internal(internal), NodeEntry::Internal(e)) => {
-                todo!()
-            }
+            (Node::Internal(internal), NodeEntry::Internal(e)) => internal.insert_largest_entry(e),
             (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_largest_entry(e),
             (Node::Leaf(..), NodeEntry::Internal(..)) => {
                 panic!("Trying to insert Internal node entry into a Leaf!")
@@ -806,49 +802,53 @@ where
     unsafe fn transfer_or_merge(&mut self, mut node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_ref() };
         let k = node.smallest_key();
-        let parent_ptr = node
-            .parent()
-            .expect("We should only be doing this on nodes with parent");
+        let Some(parent_ptr) = node.parent() else {
+            return;
+        };
+
         let parent = unsafe { parent_ptr.as_ref() };
 
         // println!("parent: {parent:?}");
-        let left_neighbour = parent.left(k);
-        let right_neighbour = parent.right(k);
+        let left_neighbour = parent.as_internal().left_entry(k);
+        let right_neighbour = parent.as_internal().right_entry(k);
 
-        println!("l neighbour: {left_neighbour:?} for k {k:?}");
-        println!("r neighbour: {right_neighbour:?} for k {k:?}");
+        // if let Some((key, left_neighbour)) = left_neighbour {
+        //     print_ptr(*left_neighbour);
+        //     println!("l neighbour: {left_neighbour:?} for k {k:?}");
+        // }
+        //
+        // if let Some((key, right_neighbour)) = right_neighbour {
+        //     print_ptr(*right_neighbour);
+        //     println!("r neighbour: {right_neighbour:?} for k {k:?}");
+        // }
 
-        print_bplustree(self, DebugOptions::default().all_address());
-        print_ptr(node_ptr);
+        // print_bplustree(self, DebugOptions::default().all_address());
+        // print_ptr(node_ptr);
 
-        if let Some(left) = left_neighbour {
-            let neighbour_ptr = self.find_leaf_node(left).unwrap();
+        if let Some((_, neighbour_ptr)) = left_neighbour {
             let neighbour = unsafe { neighbour_ptr.as_ref() };
             if neighbour.size() > self.min_node_size() {
-                unsafe { self.transfer(neighbour_ptr, node_ptr) };
+                unsafe { self.transfer(*neighbour_ptr, node_ptr) };
                 return;
             }
         }
 
-        if let Some(right) = right_neighbour {
-            let neighbour_ptr = self.find_leaf_node(right).unwrap();
+        if let Some((_, neighbour_ptr)) = right_neighbour {
             let neighbour = unsafe { neighbour_ptr.as_ref() };
             if neighbour.size() > self.min_node_size() {
-                unsafe { self.transfer(node_ptr, neighbour_ptr) };
+                unsafe { self.transfer(node_ptr, *neighbour_ptr) };
                 return;
             }
         }
 
         // Merge
-        if let Some(left) = left_neighbour {
-            let neighbour_ptr = self.find_leaf_node(left).unwrap();
-            unsafe { self.merge(neighbour_ptr, node_ptr) };
+        if let Some((_, neighbour_ptr)) = left_neighbour {
+            unsafe { self.merge(*neighbour_ptr, node_ptr) };
             return;
         }
 
-        if let Some(right) = right_neighbour {
-            let neighbour_ptr = self.find_leaf_node(right).unwrap();
-            unsafe { self.merge(node_ptr, neighbour_ptr) };
+        if let Some((_, neighbour_ptr)) = right_neighbour {
+            unsafe { self.merge(node_ptr, *neighbour_ptr) };
             return;
         }
 
@@ -870,7 +870,6 @@ where
         mut left_ptr: NonNull<Node<K, V>>,
         mut right_ptr: NonNull<Node<K, V>>,
     ) {
-        println!("Transfer?");
         let left = unsafe { left_ptr.as_mut() };
         let right = unsafe { right_ptr.as_mut() };
         let l_size = left.size();
@@ -897,7 +896,6 @@ where
         mut left_ptr: NonNull<Node<K, V>>,
         mut right_ptr: NonNull<Node<K, V>>,
     ) {
-        println!("Merge?");
         let left = unsafe { left_ptr.as_mut() };
         let right = unsafe { right_ptr.as_mut() };
         let l_size = left.size();
@@ -934,9 +932,8 @@ where
         if let Some(parent_ptr) = current.parent() {
             let parent = unsafe { parent_ptr.as_ref() };
             if parent.size() < self.min_node_size() {
+                todo!();
                 self.transfer_or_merge(parent_ptr);
-                print_bplustree(self, DebugOptions::default().all_address());
-                print_ptr(parent_ptr);
                 todo!()
             }
         }
@@ -1153,7 +1150,7 @@ where
                 } else {
                     "null".to_string()
                 };
-                format!("({}) {key:key_length$?}  ->  ", formatted_ptr)
+                format!("{} {key:key_length$?}  ->  ", formatted_ptr)
             } else {
                 format!("{key:key_length$?}  ->  ")
             };
@@ -1293,6 +1290,7 @@ mod tests {
                 btree.insert((12345, 5), 1);
                 btree.insert((12345, 10), 2);
                 btree.insert((12345, 15), 3);
+                btree.insert((12345, 20), 4);
                 print_bplustree(&btree, options);
             }
 
@@ -1315,6 +1313,7 @@ mod tests {
         }
 
         mod insert {
+            use crate::bplustree::tests::LevelIterator;
             use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
 
             #[test]
@@ -1326,7 +1325,7 @@ mod tests {
             #[test]
             fn insert_multiple_values() {
                 let mut btree = BPlusTree::new(4);
-                let options = Default::default();
+                let options = DebugOptions::default().all_address();
                 print_bplustree(&btree, options);
                 println!();
 
@@ -1349,6 +1348,58 @@ mod tests {
                 println!();
                 print_bplustree(&btree, options);
                 println!();
+
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+                assert_eq!(level1.len(), 1);
+                let root = level1[0];
+                assert!(root.parent().is_none());
+            }
+
+            #[test]
+            fn insert_5_values() {
+                let mut btree = BPlusTree::new(4);
+                let options = DebugOptions::default().all_address();
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 0), 0);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 5), 1);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 10), 2);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 15), 3);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.insert((12345, 20), 4);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+                assert_eq!(level1.len(), 1);
+                let root = level1[0];
+                assert!(root.parent().is_none());
             }
 
             #[test]
@@ -1777,7 +1828,6 @@ mod tests {
                 println!();
 
                 assert_eq!(btree.remove(&0), Some(0));
-
                 {
                     println!();
                     print_bplustree(&btree, DebugOptions::default());
@@ -2110,37 +2160,42 @@ mod tests {
 
             #[test]
             fn remove_and_collapse_1() {
+                let options = DebugOptions::default().all_address();
                 let mut btree = BPlusTree::new(4);
                 for i in 0..=10 {
                     btree.insert(5 * i, i);
+
+                    println!();
+                    print_bplustree(&btree, options);
+                    println!();
                 }
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&0);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&5);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&10);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&15);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 assert!(false, "this needs a proper assert");
@@ -2273,6 +2328,20 @@ mod tests {
                 println!();
 
                 btree.remove(&0);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                /////////////////////
+
+                btree.remove(&15);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&10);
 
                 println!();
                 print_bplustree(&btree, DebugOptions::default());
