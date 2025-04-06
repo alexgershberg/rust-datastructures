@@ -26,6 +26,10 @@ impl<K, V> Internal<K, V> {
         self.links.len()
     }
 
+    fn keys(&self) -> Vec<&K> {
+        self.links.iter().map(|(k, _)| k).collect::<Vec<_>>()
+    }
+
     fn smallest_key(&self) -> &K {
         let link = self.links.first().unwrap();
         &link.0
@@ -108,11 +112,11 @@ where
         &mut self.links[index]
     }
 
-    fn left(&self, k: &K) -> Option<&K> {
-        let mut index = match self.links.binary_search_by(|(key, _)| key.cmp(k)) {
-            Ok(index) => index,
-            Err(index) => index,
-        };
+    fn left_index(&self, k: &K) -> Option<usize> {
+        let mut index = self
+            .links
+            .binary_search_by(|(key, _)| key.cmp(k))
+            .unwrap_or_else(|index| index);
 
         if index == 0 {
             return None;
@@ -120,7 +124,27 @@ where
 
         index -= 1;
 
-        Some(&self.links[index].0)
+        Some(index)
+    }
+
+    fn left(&self, k: &K) -> Option<&K> {
+        let (k, _) = self.left_entry(k)?;
+        Some(k)
+    }
+
+    fn left_mut(&mut self, k: &K) -> Option<&mut K> {
+        let (k, _) = self.left_entry_mut(k)?;
+        Some(k)
+    }
+
+    fn left_entry(&self, k: &K) -> Option<&(K, NonNull<Node<K, V>>)> {
+        let index = self.left_index(k)?;
+        Some(&self.links[index])
+    }
+
+    fn left_entry_mut(&mut self, k: &K) -> Option<&mut (K, NonNull<Node<K, V>>)> {
+        let index = self.left_index(k)?;
+        Some(&mut self.links[index])
     }
 
     fn right_index(&self, k: &K) -> Option<usize> {
@@ -196,6 +220,10 @@ impl<K, V> Leaf<K, V> {
         self.data.len()
     }
 
+    fn keys(&self) -> Vec<&K> {
+        self.data.iter().map(|(k, _)| k).collect::<Vec<_>>()
+    }
+
     fn smallest_key(&self) -> &K {
         let entry = self.data.first().unwrap();
         &entry.0
@@ -217,7 +245,12 @@ impl<K, V> Leaf<K, V> {
         self.data.pop().unwrap()
     }
 
-    fn merge_into(&mut self, other: &mut Leaf<K, V>) {
+    fn lmerge_into(&mut self, other: &mut Leaf<K, V>) {
+        self.data.append(&mut other.data); // TODO: Should just use a VecDeque
+        swap(&mut self.data, &mut other.data);
+    }
+
+    fn rmerge_into(&mut self, other: &mut Leaf<K, V>) {
         other.data.append(&mut self.data);
     }
 
@@ -290,6 +323,13 @@ impl<K, V> Node<K, V> {
         match self {
             Node::Internal(internal) => internal.parent = Some(ptr),
             Node::Leaf(leaf) => leaf.parent = Some(ptr),
+        }
+    }
+
+    fn keys(&self) -> Vec<&K> {
+        match self {
+            Node::Internal(internal) => internal.keys(),
+            Node::Leaf(leaf) => leaf.keys(),
         }
     }
 
@@ -413,12 +453,21 @@ impl<K, V> Node<K, V> {
         }
     }
 
-    fn merge_into(&mut self, other: &mut Node<K, V>) {
+    fn lmerge_into(&mut self, other: &mut Node<K, V>) {
         match self {
             Node::Internal(internal) => {
                 todo!()
             }
-            Node::Leaf(leaf) => leaf.merge_into(other.as_leaf_mut()),
+            Node::Leaf(leaf) => leaf.lmerge_into(other.as_leaf_mut()),
+        }
+    }
+
+    fn rmerge_into(&mut self, other: &mut Node<K, V>) {
+        match self {
+            Node::Internal(internal) => {
+                todo!()
+            }
+            Node::Leaf(leaf) => leaf.rmerge_into(other.as_leaf_mut()),
         }
     }
 }
@@ -427,6 +476,7 @@ impl<K, V> Node<K, V>
 where
     K: Ord,
     K: Ord + Debug,
+    V: Debug,
 {
     fn update_key_from_smaller_to_bigger(&mut self, k: K) {
         match self {
@@ -443,10 +493,17 @@ where
     fn update_key_from_bigger_to_smaller(&mut self, k: K) {
         match self {
             Node::Internal(internal) => {
-                let entry = internal.right_entry_mut(&k).unwrap();
-                (*entry).0 = k;
+                if let Some((key, ptr)) = internal.right_entry_mut(&k) {
+                    *key = k;
+                    return;
+                }
+
+                let (key, ptr) = internal.left_entry_mut(&k).unwrap();
+                *key = k;
             }
             Node::Leaf(leaf) => {
+                // let entry = leaf.right_entry_mut(&k).unwrap();
+                // (*entry).0 = k;
                 todo!()
             }
         }
@@ -737,14 +794,12 @@ where
         // Merge
         if let Some(left) = left_neighbour {
             let neighbour_ptr = self.find_leaf_node(left).unwrap();
-            let neighbour = unsafe { neighbour_ptr.as_ref() };
             unsafe { self.merge(neighbour_ptr, node_ptr) };
             return;
         }
 
         if let Some(right) = right_neighbour {
             let neighbour_ptr = self.find_leaf_node(right).unwrap();
-            let neighbour = unsafe { neighbour_ptr.as_ref() };
             unsafe { self.merge(node_ptr, neighbour_ptr) };
             return;
         }
@@ -778,14 +833,19 @@ where
         let l_size = left.size();
         let r_size = right.size();
         if l_size < r_size {
-            todo!();
-            let entry = right.remove_smallest_entry();
-            left.insert_largest_entry(entry);
-            unsafe { self.update_parent_key_from_smaller_to_bigger(right_ptr) }
+            let k = left.smallest_key().clone();
+            left.lmerge_into(right);
+            unsafe {
+                self.remove_key_from_single_parent(left_ptr, &k);
+                self.update_parent_key_from_smaller_to_bigger(right_ptr);
+            };
         } else {
             let k = right.smallest_key().clone();
-            right.merge_into(left);
-            unsafe { self.remove_parent_key(right_ptr, &k) };
+            right.rmerge_into(left);
+            unsafe {
+                self.remove_key_from_single_parent(right_ptr, &k);
+                self.update_parent_key_from_smaller_to_bigger(left_ptr);
+            };
         }
     }
 
@@ -828,16 +888,39 @@ where
         }
     }
 
-    unsafe fn remove_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
+    unsafe fn update_or_remove_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
+        todo!()
+    }
+
+    unsafe fn remove_key_from_hierarchy(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
         let node = unsafe { node_ptr.as_mut() };
         let mut current = node;
         while let Some(mut parent_ptr) = current.parent() {
             let parent = unsafe { parent_ptr.as_mut() };
-            if let Some(NodeValue::Internal(ptr)) = parent.remove_key(k) {
+            unsafe {
+                self.remove_key_from_node(parent_ptr, k);
+            }
+            current = parent;
+        }
+    }
+
+    unsafe fn remove_key_from_single_parent(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
+        let node = unsafe { node_ptr.as_mut() };
+        if let Some(parent_ptr) = node.parent() {
+            unsafe {
+                self.remove_key_from_node(parent_ptr, k);
+            }
+        }
+    }
+
+    unsafe fn remove_key_from_node(&self, mut node_prt: NonNull<Node<K, V>>, k: &K) {
+        let node = unsafe { node_prt.as_mut() };
+        if let Some(NodeValue::Internal(ptr)) = node.remove_key(k) {
+            let node = unsafe { ptr.as_ref() };
+            let size = node.size();
+            if size == 0 {
                 let _ = unsafe { Box::from_raw(ptr.as_ptr()) };
             }
-
-            current = parent;
         }
     }
 }
@@ -1616,7 +1699,7 @@ mod tests {
             }
 
             #[test]
-            fn remove_and_force_merge_1() {
+            fn remove_and_transfer_1() {
                 /*
                  (0:   0)
                  (5:   1)
@@ -1659,45 +1742,33 @@ mod tests {
                 btree.insert(15, 3);
                 btree.insert(20, 4);
 
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+                }
+
                 btree.remove(&0);
 
-                let mut iter = LevelIterator::new(&btree);
-                let level1 = iter.next();
-                assert_eq!(level1.len(), 1);
-                assert_eq!(
-                    level1[0]
-                        .as_internal()
-                        .links
-                        .iter()
-                        .map(|(k, _)| { *k })
-                        .collect::<Vec<_>>(),
-                    vec![5, 15]
-                );
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
 
-                let level2 = iter.next();
-                assert_eq!(level2.len(), 2);
-                assert_eq!(
-                    level2[0]
-                        .as_leaf()
-                        .data
-                        .iter()
-                        .map(|(k, _)| { *k })
-                        .collect::<Vec<_>>(),
-                    vec![5, 10]
-                );
-                assert_eq!(
-                    level2[1]
-                        .as_leaf()
-                        .data
-                        .iter()
-                        .map(|(k, _)| { *k })
-                        .collect::<Vec<_>>(),
-                    vec![15, 20]
-                );
+                    let mut iter = LevelIterator::new(&btree);
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    assert_eq!(level1[0].keys(), vec![&5, &15]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    assert_eq!(level2[0].keys(), vec![&5, &10]);
+                    assert_eq!(level2[1].keys(), vec![&15, &20]);
+                }
             }
 
             #[test]
-            fn remove_and_force_merge_2() {
+            fn remove_and_transfer_2() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
                 btree.insert(5, 1);
@@ -1707,27 +1778,39 @@ mod tests {
                 btree.insert(7, 5);
                 btree.remove(&10);
 
-                let mut iter = LevelIterator::new(&btree);
-                let level1 = iter.next();
-                assert_eq!(level1.len(), 1);
-                let root = level1[0].as_internal();
-                assert_eq!(root.links.len(), 2);
-                assert_eq!(root.links[0].0, 0);
-                assert_eq!(root.links[1].0, 15);
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0].as_internal();
+                    assert_eq!(root.links.len(), 2);
+                    assert_eq!(root.links[0].0, 0);
+                    assert_eq!(root.links[1].0, 15);
+                }
 
                 btree.remove(&15);
 
-                let mut iter = LevelIterator::new(&btree);
-                let level1 = iter.next();
-                assert_eq!(level1.len(), 1);
-                let root = level1[0].as_internal();
-                assert_eq!(root.links.len(), 2);
-                assert_eq!(root.links[0].0, 0);
-                assert_eq!(root.links[1].0, 7);
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0].as_internal();
+                    assert_eq!(root.links.len(), 2);
+                    assert_eq!(root.links[0].0, 0);
+                    assert_eq!(root.links[1].0, 7);
+                }
             }
 
             #[test]
-            fn remove_and_force_merge_3() {
+            fn remove_and_merge_1() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
                 btree.insert(5, 1);
@@ -1742,19 +1825,55 @@ mod tests {
                 btree.remove(&8);
                 btree.remove(&6);
 
-                println!();
-                print_bplustree(&btree, DebugOptions::default());
-                println!();
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &9, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 3);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&9, &15]);
+                    let keys = level2[2].keys();
+                    assert_eq!(keys, vec![&20, &30]);
+                }
 
                 btree.remove(&9);
 
-                println!();
-                print_bplustree(&btree, DebugOptions::default());
-                println!();
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &5, &15]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&20, &30]);
+                }
             }
 
             #[test]
-            fn remove_and_force_merge_4() {
+            fn remove_and_merge_2() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
                 btree.insert(5, 1);
@@ -1769,15 +1888,127 @@ mod tests {
                 btree.remove(&8);
                 btree.remove(&6);
 
-                println!();
-                print_bplustree(&btree, DebugOptions::default());
-                println!();
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &9, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 3);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&9, &15]);
+                    let keys = level2[2].keys();
+                    assert_eq!(keys, vec![&20, &30]);
+                }
 
                 btree.remove(&20);
 
-                println!();
-                print_bplustree(&btree, DebugOptions::default());
-                println!();
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &9]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&9, &15, &30]);
+                }
+            }
+
+            #[test]
+            fn remove_and_merge_3() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &10]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&20, &30, &40]);
+
+                    let level3 = iter.next();
+                    assert_eq!(level3.len(), 5);
+                    let keys = level3[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level3[1].keys();
+                    assert_eq!(keys, vec![&10, &15]);
+                    let keys = level3[2].keys();
+                    assert_eq!(keys, vec![&20, &25]);
+                    let keys = level3[3].keys();
+                    assert_eq!(keys, vec![&30, &35]);
+                    let keys = level3[4].keys();
+                    assert_eq!(keys, vec![&40, &45, &50]);
+                }
+
+                btree.remove(&25);
+
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &10]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&20, &40]);
+
+                    let level3 = iter.next();
+                    assert_eq!(level3.len(), 4);
+                    let keys = level3[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level3[1].keys();
+                    assert_eq!(keys, vec![&10, &15]);
+                    let keys = level3[2].keys();
+                    assert_eq!(keys, vec![&20, &30, &35]);
+                    let keys = level3[3].keys();
+                    assert_eq!(keys, vec![&40, &45, &50]);
+                }
             }
 
             #[test]
