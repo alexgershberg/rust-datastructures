@@ -67,8 +67,19 @@ where
 
 impl<K, V> Internal<K, V>
 where
-    K: Ord,
+    K: Ord + Debug,
 {
+    fn remove(&mut self, k: &K) -> Option<NonNull<Node<K, V>>> {
+        let result = self.links.binary_search_by(|(key, _)| key.cmp(k));
+        match result {
+            Ok(index) => {
+                let (k, v) = self.links.remove(index);
+                Some(v)
+            }
+            Err(index) => None,
+        }
+    }
+
     fn find(&self, k: &K) -> &(K, NonNull<Node<K, V>>) {
         debug_assert!(
             !self.links.is_empty(),
@@ -112,10 +123,18 @@ where
         Some(&self.links[index].0)
     }
 
-    fn right(&self, k: &K) -> Option<&K> {
+    fn right_index(&self, k: &K) -> Option<usize> {
         let index = self.links.binary_search_by(|(key, _)| key.cmp(k));
-        if index.unwrap_or_else(|index| index) >= (self.links.len() - 1) {
-            return None;
+        if let Ok(index) = index {
+            if index >= (self.links.len() - 1) {
+                return None;
+            }
+        }
+
+        if let Err(index) = index {
+            if index > (self.links.len() - 1) {
+                return None;
+            }
         }
 
         let index: usize = match index {
@@ -123,7 +142,27 @@ where
             Err(index) => index,
         };
 
-        Some(&self.links[index].0)
+        Some(index)
+    }
+
+    fn right(&self, k: &K) -> Option<&K> {
+        let (k, _) = self.right_entry(k)?;
+        Some(k)
+    }
+
+    fn right_mut(&mut self, k: &K) -> Option<&mut K> {
+        let (k, _) = self.right_entry_mut(k)?;
+        Some(k)
+    }
+
+    fn right_entry(&self, k: &K) -> Option<&(K, NonNull<Node<K, V>>)> {
+        let index = self.right_index(k)?;
+        Some(&self.links[index])
+    }
+
+    fn right_entry_mut(&mut self, k: &K) -> Option<&mut (K, NonNull<Node<K, V>>)> {
+        let index = self.right_index(k)?;
+        Some(&mut self.links[index])
     }
 }
 
@@ -178,6 +217,10 @@ impl<K, V> Leaf<K, V> {
         self.data.pop().unwrap()
     }
 
+    fn merge_into(&mut self, other: &mut Leaf<K, V>) {
+        other.data.append(&mut self.data);
+    }
+
     fn is_root(&self) -> bool {
         self.parent.is_none()
     }
@@ -212,6 +255,18 @@ where
             Err(index) => None,
         }
     }
+}
+
+#[derive(Debug)]
+enum NodeEntry<K, V> {
+    Leaf((K, V)),
+    Internal((K, NonNull<Node<K, V>>)),
+}
+
+#[derive(Debug)]
+enum NodeValue<K, V> {
+    Leaf(V),
+    Internal(NonNull<Node<K, V>>),
 }
 
 #[derive(Debug)]
@@ -309,16 +364,86 @@ impl<K, V> Node<K, V> {
             Node::Leaf(leaf) => leaf,
         }
     }
+
+    fn insert_smallest_entry(&mut self, e: NodeEntry<K, V>) {
+        match (self, e) {
+            (Node::Internal(internal), NodeEntry::Internal(e)) => {
+                todo!()
+            }
+            (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_smallest_entry(e),
+            (Node::Leaf(..), NodeEntry::Internal(..)) => {
+                panic!("Trying to insert Internal node entry into a Leaf!")
+            }
+            (Node::Internal(..), NodeEntry::Leaf(..)) => {
+                panic!("Trying to insert Leaf entry into an Internal node!")
+            }
+        }
+    }
+
+    fn remove_smallest_entry(&mut self) -> NodeEntry<K, V> {
+        match self {
+            Node::Internal(internal) => {
+                todo!()
+            }
+            Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_smallest_entry()),
+        }
+    }
+
+    fn insert_largest_entry(&mut self, e: NodeEntry<K, V>) {
+        match (self, e) {
+            (Node::Internal(internal), NodeEntry::Internal(e)) => {
+                todo!()
+            }
+            (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_largest_entry(e),
+            (Node::Leaf(..), NodeEntry::Internal(..)) => {
+                panic!("Trying to insert Internal node entry into a Leaf!")
+            }
+            (Node::Internal(..), NodeEntry::Leaf(..)) => {
+                panic!("Trying to insert Leaf entry into an Internal node!")
+            }
+        }
+    }
+
+    fn remove_largest_entry(&mut self) -> NodeEntry<K, V> {
+        match self {
+            Node::Internal(internal) => {
+                todo!()
+            }
+            Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_largest_entry()),
+        }
+    }
+
+    fn merge_into(&mut self, other: &mut Node<K, V>) {
+        match self {
+            Node::Internal(internal) => {
+                todo!()
+            }
+            Node::Leaf(leaf) => leaf.merge_into(other.as_leaf_mut()),
+        }
+    }
 }
 
 impl<K, V> Node<K, V>
 where
     K: Ord,
+    K: Ord + Debug,
 {
-    fn update_key(&mut self, k: K) {
+    fn update_key_from_smaller_to_bigger(&mut self, k: K) {
         match self {
             Node::Internal(internal) => {
                 let entry = internal.find_mut(&k);
+                (*entry).0 = k;
+            }
+            Node::Leaf(leaf) => {
+                todo!()
+            }
+        }
+    }
+
+    fn update_key_from_bigger_to_smaller(&mut self, k: K) {
+        match self {
+            Node::Internal(internal) => {
+                let entry = internal.right_entry_mut(&k).unwrap();
                 (*entry).0 = k;
             }
             Node::Leaf(leaf) => {
@@ -341,6 +466,19 @@ where
             Node::Internal(internal) => internal.right(k),
             Node::Leaf(leaf) => {
                 todo!()
+            }
+        }
+    }
+
+    fn remove_key(&mut self, k: &K) -> Option<NodeValue<K, V>> {
+        match self {
+            Node::Internal(internal) => {
+                let v = internal.remove(k)?;
+                Some(NodeValue::Internal(v))
+            }
+            Node::Leaf(leaf) => {
+                let v = leaf.remove(k)?;
+                Some(NodeValue::Leaf(v))
             }
         }
     }
@@ -480,14 +618,12 @@ where
         }
 
         if need_to_recursively_update_parents {
-            unsafe { self.update_parent_key(node_ptr) };
+            unsafe { self.update_parent_key_from_smaller_to_bigger(node_ptr) };
         }
 
         let size = unsafe { node_ptr.as_ref().size() }; // Miri Stacked Borrows rule violation without this line
         if size < self.min_node_size() {
-            print_bplustree(self, DebugOptions::default());
-
-            unsafe { self.merge_or_reconcile(node_ptr) };
+            unsafe { self.transfer_or_merge(node_ptr) };
         }
 
         value
@@ -565,7 +701,7 @@ where
         }
     }
 
-    unsafe fn merge_or_reconcile(&self, node_ptr: NonNull<Node<K, V>>) {
+    unsafe fn transfer_or_merge(&self, node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_ref() };
         let k = node.smallest_key();
         let parent_ptr = node
@@ -573,18 +709,18 @@ where
             .expect("We should only be doing this on nodes with parent");
         let parent = unsafe { parent_ptr.as_ref() };
 
-        println!("parent: {parent:?}");
+        // println!("parent: {parent:?}");
         let left_neighbour = parent.left(k);
         let right_neighbour = parent.right(k);
 
-        println!("l neighbour: {left_neighbour:?} for k {k:?}");
-        println!("r neighbour: {right_neighbour:?} for k {k:?}");
+        // println!("l neighbour: {left_neighbour:?} for k {k:?}");
+        // println!("r neighbour: {right_neighbour:?} for k {k:?}");
 
         if let Some(left) = left_neighbour {
             let neighbour_ptr = self.find_leaf_node(left).unwrap();
             let neighbour = unsafe { neighbour_ptr.as_ref() };
             if neighbour.size() > self.min_node_size() {
-                unsafe { self.merge(neighbour_ptr, node_ptr) };
+                unsafe { self.transfer(neighbour_ptr, node_ptr) };
                 return;
             }
         }
@@ -593,30 +729,64 @@ where
             let neighbour_ptr = self.find_leaf_node(right).unwrap();
             let neighbour = unsafe { neighbour_ptr.as_ref() };
             if neighbour.size() > self.min_node_size() {
-                unsafe { self.merge(node_ptr, neighbour_ptr) };
+                unsafe { self.transfer(node_ptr, neighbour_ptr) };
                 return;
             }
         }
 
-        todo!()
+        // Merge
+        if let Some(left) = left_neighbour {
+            let neighbour_ptr = self.find_leaf_node(left).unwrap();
+            let neighbour = unsafe { neighbour_ptr.as_ref() };
+            unsafe { self.merge(neighbour_ptr, node_ptr) };
+            return;
+        }
+
+        if let Some(right) = right_neighbour {
+            let neighbour_ptr = self.find_leaf_node(right).unwrap();
+            let neighbour = unsafe { neighbour_ptr.as_ref() };
+            unsafe { self.merge(node_ptr, neighbour_ptr) };
+            return;
+        }
+
+        todo!("IDK WHAT HAPPENS NOW LOL. REMOVE THE ROOT?")
     }
 
-    unsafe fn merge(&self, mut left_ptr: NonNull<Node<K, V>>, mut right_ptr: NonNull<Node<K, V>>) {
-        println!("merging...");
-
-        let left = unsafe { left_ptr.as_mut() }.as_leaf_mut();
-        let right = unsafe { right_ptr.as_mut() }.as_leaf_mut();
+    unsafe fn transfer(
+        &self,
+        mut left_ptr: NonNull<Node<K, V>>,
+        mut right_ptr: NonNull<Node<K, V>>,
+    ) {
+        let left = unsafe { left_ptr.as_mut() };
+        let right = unsafe { right_ptr.as_mut() };
         let l_size = left.size();
         let r_size = right.size();
         if l_size < r_size {
             let entry = right.remove_smallest_entry();
             left.insert_largest_entry(entry);
-            unsafe { self.update_parent_key(right_ptr) }
+            unsafe { self.update_parent_key_from_smaller_to_bigger(right_ptr) }
         } else {
-            todo!()
+            let entry = left.remove_largest_entry();
+            right.insert_smallest_entry(entry);
+            unsafe { self.update_parent_key_from_bigger_to_smaller(right_ptr) }
         }
+    }
 
-        print_bplustree(&self, DebugOptions { show_parent: true });
+    unsafe fn merge(&self, mut left_ptr: NonNull<Node<K, V>>, mut right_ptr: NonNull<Node<K, V>>) {
+        let left = unsafe { left_ptr.as_mut() };
+        let right = unsafe { right_ptr.as_mut() };
+        let l_size = left.size();
+        let r_size = right.size();
+        if l_size < r_size {
+            todo!();
+            let entry = right.remove_smallest_entry();
+            left.insert_largest_entry(entry);
+            unsafe { self.update_parent_key_from_smaller_to_bigger(right_ptr) }
+        } else {
+            let k = right.smallest_key().clone();
+            right.merge_into(left);
+            unsafe { self.remove_parent_key(right_ptr, &k) };
+        }
     }
 
     unsafe fn update_parent_smallest_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
@@ -632,14 +802,40 @@ where
         }
     }
 
-    unsafe fn update_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
+    unsafe fn update_parent_key_from_smaller_to_bigger(&self, mut node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_mut() };
         let smallest = node.smallest_key().clone();
 
         let mut current = node;
         while let Some(mut parent_ptr) = current.parent() {
             let parent = unsafe { parent_ptr.as_mut() };
-            parent.update_key(smallest.clone());
+            parent.update_key_from_smaller_to_bigger(smallest.clone());
+
+            current = parent;
+        }
+    }
+
+    unsafe fn update_parent_key_from_bigger_to_smaller(&self, mut node_ptr: NonNull<Node<K, V>>) {
+        let node = unsafe { node_ptr.as_mut() };
+        let smallest = node.smallest_key().clone();
+
+        let mut current = node;
+        while let Some(mut parent_ptr) = current.parent() {
+            let parent = unsafe { parent_ptr.as_mut() };
+            parent.update_key_from_bigger_to_smaller(smallest.clone());
+
+            current = parent;
+        }
+    }
+
+    unsafe fn remove_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
+        let node = unsafe { node_ptr.as_mut() };
+        let mut current = node;
+        while let Some(mut parent_ptr) = current.parent() {
+            let parent = unsafe { parent_ptr.as_mut() };
+            if let Some(NodeValue::Internal(ptr)) = parent.remove_key(k) {
+                let _ = unsafe { Box::from_raw(ptr.as_ptr()) };
+            }
 
             current = parent;
         }
@@ -677,7 +873,7 @@ where
         return;
     };
 
-    let key = tree
+    let _ = tree
         .largest_key()
         .expect("If a tree is not empty, it's guaranteed to have at least a single value");
 
@@ -685,8 +881,85 @@ where
 }
 
 #[derive(Debug, Copy, Clone, Default)]
+struct PtrDebugOptions {
+    show_values: bool,
+}
+
+impl PtrDebugOptions {
+    fn values(self) -> Self {
+        Self { show_values: true }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+struct ShowParent {
+    internal: Option<PtrDebugOptions>,
+    leaf: Option<PtrDebugOptions>,
+}
+
+#[derive(Debug, Copy, Clone, Default)]
 pub struct DebugOptions {
-    pub show_parent: bool,
+    show_parent: ShowParent,
+    override_padding: Option<usize>,
+}
+
+impl DebugOptions {
+    fn internal_address(mut self) -> Self {
+        let ptr_debug_options = if let Some(ptr_debug_options) = self.show_parent.internal {
+            ptr_debug_options
+        } else {
+            PtrDebugOptions::default()
+        };
+
+        self.show_parent.internal = Some(ptr_debug_options);
+        self
+    }
+
+    fn internal_values(mut self) -> Self {
+        let ptr_debug_options = if let Some(ptr_debug_options) = self.show_parent.internal {
+            ptr_debug_options.values()
+        } else {
+            PtrDebugOptions::default().values()
+        };
+
+        self.show_parent.internal = Some(ptr_debug_options);
+        self
+    }
+
+    fn leaf_address(mut self) -> Self {
+        let ptr_debug_options = if let Some(ptr_debug_options) = self.show_parent.leaf {
+            ptr_debug_options
+        } else {
+            PtrDebugOptions::default().values()
+        };
+
+        self.show_parent.leaf = Some(ptr_debug_options);
+        self
+    }
+
+    fn leaf_values(mut self) -> Self {
+        let ptr_debug_options = if let Some(ptr_debug_options) = self.show_parent.leaf {
+            ptr_debug_options.values()
+        } else {
+            PtrDebugOptions::default().values()
+        };
+
+        self.show_parent.leaf = Some(ptr_debug_options);
+        self
+    }
+
+    fn all_address(self) -> Self {
+        self.leaf_address().internal_address()
+    }
+
+    fn all_values(self) -> Self {
+        self.internal_values().leaf_values()
+    }
+
+    fn override_padding(mut self, padding: usize) -> Self {
+        self.override_padding = Some(padding);
+        self
+    }
 }
 
 unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>, options: DebugOptions)
@@ -694,11 +967,26 @@ where
     K: Debug,
     V: Debug,
 {
-    let key_length = 4;
+    let key_length = if let Some(padding) = options.override_padding {
+        padding
+    } else {
+        4
+    };
     let mut stack = VecDeque::from([(None, 0, false, ptr, -1)]);
-    while let Some((k, mut offset, ignore_offset, current, lvl)) = stack.pop_front() {
+    while let Some((k, mut offset, ignore_offset, current_ptr, lvl)) = stack.pop_front() {
+        let current = unsafe { current_ptr.as_ref() };
         if let Some(key) = k {
-            let line = format!("{key:key_length$?}  ->  ");
+            let line = if let Some(ptr_debug_options) = options.show_parent.internal {
+                let formatted_ptr = if let Some(parent_ptr) = current.parent() {
+                    unsafe { format_ptr(parent_ptr, ptr_debug_options) }
+                } else {
+                    "null".to_string()
+                };
+                format!("({}) {key:key_length$?}  ->  ", formatted_ptr)
+            } else {
+                format!("{key:key_length$?}  ->  ")
+            };
+
             offset += line.chars().count();
             let mut offset = offset;
             if ignore_offset {
@@ -709,8 +997,7 @@ where
 
         let mut should_print_new_line = false;
 
-        let node = unsafe { current.as_ref() };
-        match node {
+        match current {
             Node::Internal(internal) => {
                 for (index, (k, ptr)) in internal.links.iter().rev().enumerate() {
                     let last = index == internal.links.len() - 1;
@@ -724,11 +1011,11 @@ where
             Node::Leaf(leaf) => {
                 let mut first = true;
                 for (k, v) in &leaf.data {
-                    let line = if options.show_parent {
+                    let line = if let Some(ptr_debug_options) = options.show_parent.leaf {
                         let formatted_ptr = if let Some(parent) = leaf.parent {
-                            unsafe { format_ptr(leaf.parent.unwrap()) }
+                            unsafe { format_ptr(parent, ptr_debug_options) }
                         } else {
-                            "No parent".to_string()
+                            "null".to_string()
                         };
                         format!("({}) {k:key_length$?}: {v:key_length$?}", formatted_ptr)
                     } else {
@@ -747,38 +1034,28 @@ where
             }
         }
 
-        if should_print_new_line {
+        if should_print_new_line && !stack.is_empty() {
             println!()
         }
     }
 }
 
-unsafe fn format_ptr<K, V>(ptr: NonNull<Node<K, V>>) -> String
+unsafe fn format_ptr<K, V>(ptr: NonNull<Node<K, V>>, ptr_debug_options: PtrDebugOptions) -> String
 where
     K: Debug,
     V: Debug,
 {
-    unsafe {
-        let n = &*ptr.as_ptr();
-        match n {
-            Node::Internal(internal) => {
-                format!(
-                    "({ptr:p}): {:?}",
-                    internal
-                        .links
-                        .iter()
-                        .map(|(k, v)| { k })
-                        .collect::<Vec<_>>()
-                )
-            }
-            Node::Leaf(leaf) => {
-                format!(
-                    "({ptr:p}): {:?}",
-                    leaf.data.iter().map(|(k, v)| { k }).collect::<Vec<_>>()
-                )
-            }
-        }
+    let n = unsafe { &*ptr.as_ptr() };
+    if !ptr_debug_options.show_values {
+        return format!("({ptr:p})",);
     }
+
+    let data = match n {
+        Node::Internal(internal) => internal.links.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+        Node::Leaf(leaf) => leaf.data.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+    };
+
+    format!("({ptr:p}): {:?}", data)
 }
 
 unsafe fn print_ptr<K, V>(ptr: NonNull<Node<K, V>>)
@@ -787,7 +1064,7 @@ where
     V: Debug,
 {
     unsafe {
-        println!("{}", format_ptr(ptr));
+        println!("{}", format_ptr(ptr, PtrDebugOptions::default().values()));
     }
 }
 
@@ -835,12 +1112,12 @@ mod tests {
 
     mod bplustree {
         mod print {
-            use crate::bplustree::{BPlusTree, print_bplustree};
+            use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
 
             #[test]
             fn print_single_level() {
                 let mut btree = BPlusTree::new(4);
-                let options = Default::default();
+                let options = DebugOptions::default().all_values();
                 btree.insert((12345, 0), 0);
                 btree.insert((12345, 5), 1);
                 btree.insert((12345, 10), 2);
@@ -908,50 +1185,74 @@ mod tests {
                 let mut btree = BPlusTree::new(4);
                 let options = Default::default();
                 btree.insert((12345, 0), 0);
+
                 println!();
                 print_bplustree(&btree, options);
+                println!();
 
                 btree.insert((12345, 5), 1);
+
                 println!();
                 print_bplustree(&btree, options);
+                println!();
 
                 btree.insert((12345, 10), 2);
+
                 println!();
                 print_bplustree(&btree, options);
+                println!();
 
                 btree.insert((12345, 15), 3);
+
                 println!();
                 print_bplustree(&btree, options);
+                println!();
 
                 btree.insert((12345, 20), 4);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 25), 5);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 11), 6);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 35), 7);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 40), 8);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 45), 9);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 50), 10);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
 
                 btree.insert((12345, 55), 11);
+
+                println!();
                 print_bplustree(&btree, options);
                 println!();
             }
@@ -1230,7 +1531,7 @@ mod tests {
 
                 btree.insert((12345, 22), 13);
                 println!();
-                print_bplustree(&btree, DebugOptions { show_parent: true });
+                print_bplustree(&btree, DebugOptions::default().leaf_address());
                 println!();
 
                 /*
@@ -1259,7 +1560,9 @@ mod tests {
 
         mod remove {
             use crate::bplustree::tests::LevelIterator;
-            use crate::bplustree::{BPlusTree, Internal, Node, print_bplustree, print_ptr};
+            use crate::bplustree::{
+                BPlusTree, DebugOptions, Internal, Node, print_bplustree, print_ptr,
+            };
 
             #[test]
             fn remove_on_empty() {
@@ -1401,20 +1704,80 @@ mod tests {
                 btree.insert(10, 2);
                 btree.insert(15, 3);
                 btree.insert(20, 4);
-
-                print_bplustree(&btree, Default::default());
-
+                btree.insert(7, 5);
                 btree.remove(&10);
 
-                print_bplustree(&btree, Default::default());
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+                assert_eq!(level1.len(), 1);
+                let root = level1[0].as_internal();
+                assert_eq!(root.links.len(), 2);
+                assert_eq!(root.links[0].0, 0);
+                assert_eq!(root.links[1].0, 15);
 
                 btree.remove(&15);
 
-                print_bplustree(&btree, Default::default());
+                let mut iter = LevelIterator::new(&btree);
+                let level1 = iter.next();
+                assert_eq!(level1.len(), 1);
+                let root = level1[0].as_internal();
+                assert_eq!(root.links.len(), 2);
+                assert_eq!(root.links[0].0, 0);
+                assert_eq!(root.links[1].0, 7);
+            }
 
-                // btree.remove(&20);
+            #[test]
+            fn remove_and_force_merge_3() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(15, 2);
+                btree.insert(20, 3);
+                btree.insert(7, 4);
+                btree.insert(9, 5);
+                btree.insert(30, 6);
+                btree.insert(8, 7);
+                btree.insert(6, 8);
+                btree.remove(&7);
+                btree.remove(&8);
+                btree.remove(&6);
 
-                // print_bplustree(&btree, Default::default());
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&9);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+            }
+
+            #[test]
+            fn remove_and_force_merge_4() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(15, 2);
+                btree.insert(20, 3);
+                btree.insert(7, 4);
+                btree.insert(9, 5);
+                btree.insert(30, 6);
+                btree.insert(8, 7);
+                btree.insert(6, 8);
+                btree.remove(&7);
+                btree.remove(&8);
+                btree.remove(&6);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&20);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
             }
 
             #[test]
@@ -1466,7 +1829,7 @@ mod tests {
                 }
 
                 println!();
-                print_bplustree(&btree, DebugOptions { show_parent: false });
+                print_bplustree(&btree, DebugOptions::default());
                 println!();
                 println!("size: {}", btree.size());
             }
@@ -1485,7 +1848,7 @@ mod tests {
                 }
 
                 println!();
-                print_bplustree(&btree, DebugOptions { show_parent: false });
+                print_bplustree(&btree, DebugOptions::default());
                 println!();
                 println!("size: {}", btree.size());
             }
