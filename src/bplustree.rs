@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::env::current_exe;
 use std::fmt::Debug;
 use std::mem::swap;
 use std::ptr::NonNull;
@@ -33,6 +34,35 @@ impl<K, V> Internal<K, V> {
     fn smallest_key(&self) -> &K {
         let link = self.links.first().unwrap();
         &link.0
+    }
+
+    fn insert_smallest_entry(&mut self, e: (K, NonNull<Node<K, V>>)) {
+        self.links.insert(0, e);
+    }
+
+    fn remove_smallest_entry(&mut self) -> (K, NonNull<Node<K, V>>) {
+        self.links.remove(0)
+    }
+
+    fn insert_largest_entry(&mut self, e: (K, NonNull<Node<K, V>>)) {
+        self.links.push(e);
+    }
+
+    fn remove_largest_entry(&mut self) -> (K, NonNull<Node<K, V>>) {
+        self.links.pop().unwrap()
+    }
+
+    fn lmerge_into(&mut self, other: &mut Internal<K, V>) {
+        self.links.append(&mut other.links); // TODO: Should just use a VecDeque
+        swap(&mut self.links, &mut other.links);
+    }
+
+    fn rmerge_into(&mut self, other: &mut Internal<K, V>) {
+        other.links.append(&mut self.links);
+    }
+
+    fn is_root(&self) -> bool {
+        self.parent.is_none()
     }
 }
 
@@ -288,6 +318,14 @@ where
             Err(index) => None,
         }
     }
+
+    fn find(&self, k: &K) -> Option<&(K, V)> {
+        self.data.iter().find(|(key, _)| key == k)
+    }
+
+    fn find_mut(&mut self, k: &K) -> Option<&mut (K, V)> {
+        self.data.iter_mut().find(|(key, _)| key == k)
+    }
 }
 
 #[derive(Debug)]
@@ -455,19 +493,22 @@ impl<K, V> Node<K, V> {
 
     fn lmerge_into(&mut self, other: &mut Node<K, V>) {
         match self {
-            Node::Internal(internal) => {
-                todo!()
-            }
+            Node::Internal(internal) => internal.lmerge_into(other.as_internal_mut()),
             Node::Leaf(leaf) => leaf.lmerge_into(other.as_leaf_mut()),
         }
     }
 
     fn rmerge_into(&mut self, other: &mut Node<K, V>) {
         match self {
-            Node::Internal(internal) => {
-                todo!()
-            }
+            Node::Internal(internal) => internal.rmerge_into(other.as_internal_mut()),
             Node::Leaf(leaf) => leaf.rmerge_into(other.as_leaf_mut()),
+        }
+    }
+
+    fn is_root(&self) -> bool {
+        match self {
+            Node::Internal(internal) => internal.is_root(),
+            Node::Leaf(leaf) => leaf.is_root(),
         }
     }
 }
@@ -502,8 +543,6 @@ where
                 *key = k;
             }
             Node::Leaf(leaf) => {
-                // let entry = leaf.right_entry_mut(&k).unwrap();
-                // (*entry).0 = k;
                 todo!()
             }
         }
@@ -590,6 +629,10 @@ where
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
         println!("btree.insert({k:?}, {v:?});");
+        self.internal_insert(k, v)
+    }
+
+    fn internal_insert(&mut self, k: K, v: V) -> Option<V> {
         if self.root.is_none() {
             let mut leaf = Leaf::new();
             leaf.insert(k, v);
@@ -691,7 +734,9 @@ where
     }
 
     pub fn find(&mut self, k: &K) -> Option<&V> {
-        todo!()
+        let leaf = self.find_leaf_node(k)?;
+        let (_, v) = unsafe { leaf.as_ref() }.as_leaf().find(k)?;
+        Some(v)
     }
 
     fn max_node_size(&self) -> usize {
@@ -758,7 +803,7 @@ where
         }
     }
 
-    unsafe fn transfer_or_merge(&self, node_ptr: NonNull<Node<K, V>>) {
+    unsafe fn transfer_or_merge(&mut self, mut node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_ref() };
         let k = node.smallest_key();
         let parent_ptr = node
@@ -770,8 +815,11 @@ where
         let left_neighbour = parent.left(k);
         let right_neighbour = parent.right(k);
 
-        // println!("l neighbour: {left_neighbour:?} for k {k:?}");
-        // println!("r neighbour: {right_neighbour:?} for k {k:?}");
+        println!("l neighbour: {left_neighbour:?} for k {k:?}");
+        println!("r neighbour: {right_neighbour:?} for k {k:?}");
+
+        print_bplustree(self, DebugOptions::default().all_address());
+        print_ptr(node_ptr);
 
         if let Some(left) = left_neighbour {
             let neighbour_ptr = self.find_leaf_node(left).unwrap();
@@ -804,41 +852,64 @@ where
             return;
         }
 
-        todo!("IDK WHAT HAPPENS NOW LOL. REMOVE THE ROOT?")
+        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
+        let (k, v) = leaf.remove_smallest_entry();
+        unsafe {
+            self.remove_key_from_hierarchy(node_ptr, &k);
+        }
+        assert!(
+            self.internal_insert(k, v).is_none(),
+            "There should be no entry for this key"
+        );
+
+        todo!()
     }
 
     unsafe fn transfer(
-        &self,
+        &mut self,
         mut left_ptr: NonNull<Node<K, V>>,
         mut right_ptr: NonNull<Node<K, V>>,
     ) {
+        println!("Transfer?");
         let left = unsafe { left_ptr.as_mut() };
         let right = unsafe { right_ptr.as_mut() };
         let l_size = left.size();
         let r_size = right.size();
-        if l_size < r_size {
+        let current_ptr = if l_size < r_size {
             let entry = right.remove_smallest_entry();
             left.insert_largest_entry(entry);
             unsafe { self.update_parent_key_from_smaller_to_bigger(right_ptr) }
+            right_ptr
         } else {
             let entry = left.remove_largest_entry();
             right.insert_smallest_entry(entry);
             unsafe { self.update_parent_key_from_bigger_to_smaller(right_ptr) }
+            left_ptr
+        };
+
+        unsafe {
+            self.handle_parent_size_change(current_ptr);
         }
     }
 
-    unsafe fn merge(&self, mut left_ptr: NonNull<Node<K, V>>, mut right_ptr: NonNull<Node<K, V>>) {
+    unsafe fn merge(
+        &mut self,
+        mut left_ptr: NonNull<Node<K, V>>,
+        mut right_ptr: NonNull<Node<K, V>>,
+    ) {
+        println!("Merge?");
         let left = unsafe { left_ptr.as_mut() };
         let right = unsafe { right_ptr.as_mut() };
         let l_size = left.size();
         let r_size = right.size();
-        if l_size < r_size {
+        let current_ptr = if l_size < r_size {
             let k = left.smallest_key().clone();
             left.lmerge_into(right);
             unsafe {
                 self.remove_key_from_single_parent(left_ptr, &k);
                 self.update_parent_key_from_smaller_to_bigger(right_ptr);
             };
+            right_ptr
         } else {
             let k = right.smallest_key().clone();
             right.rmerge_into(left);
@@ -846,6 +917,28 @@ where
                 self.remove_key_from_single_parent(right_ptr, &k);
                 self.update_parent_key_from_smaller_to_bigger(left_ptr);
             };
+            left_ptr
+        };
+
+        unsafe {
+            self.handle_parent_size_change(current_ptr);
+        }
+    }
+
+    unsafe fn handle_parent_size_change(&mut self, current_ptr: NonNull<Node<K, V>>) {
+        let current = unsafe { current_ptr.as_ref() };
+        if current.is_root() {
+            todo!("Should just return here")
+        }
+
+        if let Some(parent_ptr) = current.parent() {
+            let parent = unsafe { parent_ptr.as_ref() };
+            if parent.size() < self.min_node_size() {
+                self.transfer_or_merge(parent_ptr);
+                print_bplustree(self, DebugOptions::default().all_address());
+                print_ptr(parent_ptr);
+                todo!()
+            }
         }
     }
 
@@ -864,10 +957,9 @@ where
 
     unsafe fn update_parent_key_from_smaller_to_bigger(&self, mut node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_mut() };
-        let smallest = node.smallest_key().clone();
-
         let mut current = node;
         while let Some(mut parent_ptr) = current.parent() {
+            let smallest = current.smallest_key().clone();
             let parent = unsafe { parent_ptr.as_mut() };
             parent.update_key_from_smaller_to_bigger(smallest.clone());
 
@@ -877,19 +969,15 @@ where
 
     unsafe fn update_parent_key_from_bigger_to_smaller(&self, mut node_ptr: NonNull<Node<K, V>>) {
         let node = unsafe { node_ptr.as_mut() };
-        let smallest = node.smallest_key().clone();
 
         let mut current = node;
         while let Some(mut parent_ptr) = current.parent() {
             let parent = unsafe { parent_ptr.as_mut() };
+            let smallest = current.smallest_key().clone();
             parent.update_key_from_bigger_to_smaller(smallest.clone());
 
             current = parent;
         }
-    }
-
-    unsafe fn update_or_remove_parent_key(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
-        todo!()
     }
 
     unsafe fn remove_key_from_hierarchy(&self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
@@ -1592,21 +1680,21 @@ mod tests {
                 println!();
 
                 /*
-                 (12345,    4)  ->  (12345,    4):   11
-                                    (12345,    6):    2
+                                 (12345,    4)  ->  (12345,    4):   11
+                                                    (12345,    6):    2
 
-                 (12345,    7)  ->  (12345,    7):    4
-                                    (12345,   12):    6
+                                 (12345,    7)  ->  (12345,    7):    4
+                                                    (12345,   12):    6
 
-                 (12345,   14)  ->  (12345,   14):    9
-                                    (12345,   18):   12
-                                    (12345,   36):    3
-                                    (12345,   42):   10
+                                 (12345,   14)  ->  (12345,   14):    9
+                                                    (12345,   18):   12
+                                                    (12345,   36):    3
+                                                    (12345,   42):   10
 
-                 (12345,   48)  ->  (12345,   48):    7
-                                    (12345,   50):    8
-                                    (12345,   51):    5
-                */
+                                 (12345,   48)  ->  (12345,   48):    7
+                                                    (12345,   50):    8
+                                                    (12345,   51):    5
+                _               */
 
                 let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
                 let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
@@ -1643,9 +1731,7 @@ mod tests {
 
         mod remove {
             use crate::bplustree::tests::LevelIterator;
-            use crate::bplustree::{
-                BPlusTree, DebugOptions, Internal, Node, print_bplustree, print_ptr,
-            };
+            use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
 
             #[test]
             fn remove_on_empty() {
@@ -1685,17 +1771,28 @@ mod tests {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
                 btree.insert(5, 0);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
                 assert_eq!(btree.remove(&0), Some(0));
 
-                let mut iter = LevelIterator::new(&btree);
-                let level1 = iter.next();
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
 
-                assert_eq!(level1.len(), 1);
+                    let mut iter = LevelIterator::new(&btree);
+                    let level1 = iter.next();
 
-                let root = level1[0].as_leaf();
+                    assert_eq!(level1.len(), 1);
 
-                assert_eq!(root.data[0], (5, 0));
-                assert!(iter.next().is_empty());
+                    let root = level1[0].as_leaf();
+
+                    assert_eq!(root.data[0], (5, 0));
+                    assert!(iter.next().is_empty());
+                }
             }
 
             #[test]
@@ -2012,6 +2109,255 @@ mod tests {
             }
 
             #[test]
+            fn remove_and_collapse_1() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&0);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&5);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&10);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&15);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                assert!(false, "this needs a proper assert");
+            }
+
+            #[test]
+            fn remove_and_collapse_2() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&20);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&25);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&30);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&35);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&40);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&45);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&50);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                assert!(false, "this needs a proper assert");
+            }
+
+            #[test]
+            fn remove_and_collapse_3() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                btree.insert(16, 11);
+                btree.insert(17, 12);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&20);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&25);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&30);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&35);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&40);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&45);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                // btree.remove(&50);
+                //
+                // println!();
+                // print_bplustree(&btree, DebugOptions::default());
+                // println!();
+
+                assert!(false, "this needs a proper assert");
+            }
+
+            #[test]
+            fn remove_and_collapse_4() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&0);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+            }
+
+            #[test]
+            fn remove_from_leaf_node_that_is_3_levels_down() {
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &10]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&20, &30, &40]);
+
+                    let level3 = iter.next();
+                    assert_eq!(level3.len(), 5);
+                    let keys = level3[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level3[1].keys();
+                    assert_eq!(keys, vec![&10, &15]);
+                    let keys = level3[2].keys();
+                    assert_eq!(keys, vec![&20, &25]);
+                    let keys = level3[3].keys();
+                    assert_eq!(keys, vec![&30, &35]);
+                    let keys = level3[4].keys();
+                    assert_eq!(keys, vec![&40, &45, &50]);
+                }
+
+                btree.remove(&40);
+
+                {
+                    println!();
+                    print_bplustree(&btree, DebugOptions::default());
+                    println!();
+
+                    let mut iter = LevelIterator::new(&btree);
+
+                    let level1 = iter.next();
+                    assert_eq!(level1.len(), 1);
+                    let root = level1[0];
+                    let keys = root.keys();
+                    assert_eq!(keys, vec![&0, &20]);
+
+                    let level2 = iter.next();
+                    assert_eq!(level2.len(), 2);
+                    let keys = level2[0].keys();
+                    assert_eq!(keys, vec![&0, &10]);
+                    let keys = level2[1].keys();
+                    assert_eq!(keys, vec![&20, &30, &45]);
+
+                    let level3 = iter.next();
+                    assert_eq!(level3.len(), 5);
+                    let keys = level3[0].keys();
+                    assert_eq!(keys, vec![&0, &5]);
+                    let keys = level3[1].keys();
+                    assert_eq!(keys, vec![&10, &15]);
+                    let keys = level3[2].keys();
+                    assert_eq!(keys, vec![&20, &25]);
+                    let keys = level3[3].keys();
+                    assert_eq!(keys, vec![&30, &35]);
+                    let keys = level3[4].keys();
+                    assert_eq!(keys, vec![&45, &50]);
+                }
+            }
+
+            #[test]
             fn remove_smallest_should_update_the_parent() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
@@ -2020,27 +2366,37 @@ mod tests {
                 btree.insert(15, 3);
                 btree.insert(20, 4);
 
-                let mut level_iter = LevelIterator::new(&btree);
-                let level1 = level_iter.next();
-                let root_links = &level1[0].as_internal().links;
-                assert_eq!(root_links[0].0, 0);
-                assert_eq!(root_links[1].0, 10);
+                {
+                    println!();
+                    print_bplustree(&btree, Default::default());
+                    println!();
 
-                print_bplustree(&btree, Default::default());
+                    let mut level_iter = LevelIterator::new(&btree);
+                    let level1 = level_iter.next();
+                    let root_links = &level1[0].as_internal().links;
+                    assert_eq!(root_links[0].0, 0);
+                    assert_eq!(root_links[1].0, 10);
+                }
+
                 assert_eq!(btree.remove(&10), Some(2));
-                print_bplustree(&btree, Default::default());
 
-                let mut level_iter = LevelIterator::new(&btree);
-                let level1 = level_iter.next();
-                let root_links = &level1[0].as_internal().links;
-                assert_eq!(root_links[0].0, 0);
-                assert_eq!(root_links[1].0, 15);
+                {
+                    println!();
+                    print_bplustree(&btree, Default::default());
+                    println!();
+
+                    let mut level_iter = LevelIterator::new(&btree);
+                    let level1 = level_iter.next();
+                    let root_links = &level1[0].as_internal().links;
+                    assert_eq!(root_links[0].0, 0);
+                    assert_eq!(root_links[1].0, 15);
+                }
             }
         }
 
         mod fuzz {
             use crate::bplustree::{BPlusTree, DebugOptions, print_bplustree};
-            use rand::random_range;
+            use rand::{random_bool, random_range};
 
             #[test]
             #[ignore = "Long and non-deterministic"]
@@ -2082,6 +2438,478 @@ mod tests {
                 print_bplustree(&btree, DebugOptions::default());
                 println!();
                 println!("size: {}", btree.size());
+            }
+
+            #[test]
+            #[ignore = "Non-deterministic"]
+            fn insert_and_remove_at_random() {
+                let mut btree = BPlusTree::new(4);
+                let n = 500;
+                for i in 0..n {
+                    let k = random_range(0..=25);
+
+                    let insert = random_bool(0.4);
+                    if insert {
+                        btree.insert(k, i);
+                    } else {
+                        btree.remove(&k);
+                    }
+                }
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+                println!("size: {}", btree.size());
+            }
+
+            #[test]
+            fn t() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(13, 0);
+                btree.remove(&0);
+                btree.insert(3, 2);
+                btree.remove(&13);
+                btree.remove(&17);
+                btree.insert(11, 5);
+                btree.remove(&15);
+                btree.insert(19, 7);
+                btree.insert(25, 8);
+                btree.remove(&14);
+                btree.remove(&11);
+                btree.insert(16, 11);
+                btree.remove(&16);
+                btree.insert(20, 13);
+                btree.remove(&13);
+                btree.remove(&17);
+                btree.remove(&24);
+                btree.remove(&14);
+                btree.insert(14, 18);
+                btree.insert(12, 19);
+                btree.insert(14, 20);
+                btree.remove(&22);
+                btree.insert(22, 22);
+                btree.remove(&5);
+                btree.insert(24, 24);
+                btree.remove(&19);
+                btree.remove(&3);
+                btree.remove(&22);
+                btree.insert(15, 28);
+                btree.remove(&5);
+                btree.remove(&12);
+                btree.remove(&1);
+                btree.remove(&17);
+                btree.remove(&3);
+                btree.insert(12, 34);
+                btree.remove(&7);
+                btree.insert(18, 36);
+                btree.remove(&11);
+                btree.insert(20, 38);
+                btree.insert(23, 39);
+                btree.remove(&18);
+                btree.insert(17, 41);
+                btree.remove(&20);
+                btree.remove(&15);
+                btree.insert(14, 44);
+                btree.remove(&11);
+                btree.remove(&18);
+                btree.insert(1, 47);
+                btree.remove(&25);
+                btree.insert(25, 49);
+                btree.insert(24, 50);
+                btree.remove(&5);
+                btree.remove(&19);
+                btree.remove(&19);
+                btree.remove(&17);
+                btree.insert(15, 55);
+                btree.remove(&7);
+                btree.remove(&1);
+                btree.insert(12, 58);
+                btree.remove(&11);
+                btree.remove(&19);
+                btree.remove(&1);
+                btree.remove(&5);
+                btree.insert(10, 63);
+                btree.insert(20, 64);
+                btree.remove(&6);
+                btree.remove(&18);
+                btree.insert(17, 67);
+                btree.remove(&8);
+                btree.remove(&1);
+                btree.remove(&13);
+                btree.remove(&4);
+                btree.insert(4, 72);
+                btree.remove(&12);
+                btree.remove(&7);
+                btree.remove(&11);
+                btree.remove(&7);
+                btree.insert(21, 77);
+                btree.remove(&8);
+                btree.insert(10, 79);
+                btree.remove(&10);
+                btree.insert(10, 81);
+                btree.remove(&17);
+                btree.remove(&24);
+                btree.remove(&1);
+                btree.remove(&10);
+                btree.insert(7, 86);
+                btree.insert(15, 87);
+                btree.remove(&22);
+                btree.remove(&13);
+                btree.insert(4, 90);
+                btree.remove(&19);
+                btree.remove(&16);
+                btree.insert(22, 93);
+                btree.insert(8, 94);
+                btree.insert(0, 95);
+                btree.insert(16, 96);
+                btree.remove(&19);
+                btree.remove(&25);
+                btree.remove(&3);
+                btree.remove(&18);
+                btree.remove(&20);
+                btree.remove(&1);
+                btree.remove(&23);
+                btree.remove(&25);
+                btree.remove(&6);
+                btree.remove(&19);
+                btree.remove(&13);
+                btree.insert(21, 108);
+                btree.remove(&13);
+                btree.insert(6, 110);
+                btree.remove(&25);
+                btree.insert(14, 112);
+                btree.insert(13, 113);
+                btree.insert(19, 114);
+                btree.insert(6, 115);
+                btree.remove(&3);
+                btree.remove(&5);
+                btree.remove(&13);
+                btree.remove(&19);
+                btree.remove(&16);
+                btree.remove(&18);
+                btree.remove(&18);
+                btree.insert(9, 123);
+                btree.remove(&4);
+                btree.insert(23, 125);
+                btree.remove(&7);
+                btree.remove(&14);
+                btree.remove(&22);
+                btree.remove(&14);
+                btree.insert(24, 130);
+                btree.remove(&4);
+                btree.remove(&3);
+                btree.insert(24, 133);
+                btree.insert(3, 134);
+                btree.remove(&18);
+                btree.remove(&19);
+                btree.insert(8, 137);
+                btree.insert(17, 138);
+                btree.remove(&3);
+                btree.remove(&13);
+                btree.remove(&18);
+                btree.insert(0, 142);
+                btree.insert(2, 143);
+                btree.remove(&4);
+                btree.insert(19, 145);
+                btree.insert(22, 146);
+                btree.insert(20, 147);
+                btree.insert(5, 148);
+                btree.remove(&15);
+                btree.remove(&16);
+                btree.remove(&16);
+                btree.insert(18, 152);
+                btree.remove(&21);
+                btree.insert(23, 154);
+                btree.insert(0, 155);
+                btree.insert(15, 156);
+                btree.remove(&23);
+                btree.insert(8, 158);
+                btree.remove(&15);
+                btree.remove(&8);
+                btree.remove(&23);
+                btree.remove(&13);
+                btree.remove(&19);
+                btree.remove(&13);
+                btree.insert(4, 165);
+                btree.insert(9, 166);
+                btree.insert(13, 167);
+                btree.remove(&9);
+                btree.remove(&13);
+                btree.remove(&3);
+                btree.insert(15, 171);
+                btree.remove(&2);
+                btree.insert(6, 173);
+                btree.insert(25, 174);
+                btree.remove(&22);
+                btree.remove(&1);
+                btree.remove(&12);
+                btree.remove(&2);
+                btree.remove(&22);
+                btree.remove(&14);
+                btree.insert(25, 181);
+                btree.remove(&24);
+                btree.insert(5, 183);
+                btree.insert(21, 184);
+                btree.remove(&25);
+                btree.insert(15, 186);
+                btree.remove(&15);
+                btree.insert(5, 188);
+                btree.remove(&6);
+                btree.insert(18, 190);
+                btree.remove(&17);
+                btree.insert(7, 192);
+                btree.remove(&3);
+                btree.insert(15, 194);
+                btree.remove(&2);
+                btree.remove(&12);
+                btree.remove(&9);
+                btree.insert(15, 198);
+                btree.insert(25, 199);
+                btree.remove(&22);
+                btree.insert(11, 201);
+                btree.insert(1, 202);
+                btree.insert(6, 203);
+                btree.remove(&4);
+                btree.remove(&6);
+                btree.remove(&8);
+                btree.remove(&6);
+                btree.insert(6, 208);
+                btree.insert(7, 209);
+                btree.insert(24, 210);
+                btree.remove(&20);
+                btree.remove(&5);
+                btree.remove(&4);
+                btree.remove(&4);
+                btree.remove(&18);
+                btree.remove(&1);
+                btree.insert(9, 217);
+                btree.remove(&14);
+                btree.insert(16, 219);
+                btree.remove(&18);
+                btree.insert(18, 221);
+                btree.remove(&16);
+                btree.remove(&14);
+                btree.remove(&22);
+                btree.remove(&8);
+                btree.remove(&17);
+                btree.remove(&7);
+                btree.insert(0, 228);
+                btree.remove(&8);
+                btree.remove(&24);
+                btree.remove(&7);
+                btree.insert(22, 232);
+                btree.remove(&10);
+                btree.remove(&12);
+                btree.insert(19, 235);
+                btree.remove(&17);
+                btree.remove(&16);
+                btree.remove(&1);
+                btree.remove(&20);
+                btree.insert(3, 240);
+                btree.remove(&14);
+                btree.insert(2, 242);
+                btree.remove(&12);
+                btree.insert(15, 244);
+                btree.remove(&3);
+                btree.remove(&11);
+                btree.remove(&19);
+                btree.insert(1, 248);
+                btree.remove(&13);
+                btree.remove(&20);
+                btree.remove(&13);
+                btree.remove(&2);
+                btree.remove(&16);
+                btree.remove(&13);
+                btree.insert(4, 255);
+                btree.remove(&12);
+                btree.insert(21, 257);
+                btree.insert(19, 258);
+                btree.insert(24, 259);
+                btree.insert(11, 260);
+                btree.remove(&19);
+                btree.insert(2, 262);
+                btree.remove(&9);
+                btree.remove(&7);
+                btree.remove(&3);
+                btree.remove(&17);
+                btree.insert(17, 267);
+                btree.remove(&20);
+                btree.remove(&8);
+                btree.remove(&2);
+                btree.remove(&14);
+                btree.insert(20, 272);
+                btree.remove(&13);
+                btree.insert(9, 274);
+                btree.insert(11, 275);
+                btree.insert(24, 276);
+                btree.remove(&9);
+                btree.insert(5, 278);
+                btree.remove(&12);
+                btree.remove(&10);
+                btree.remove(&9);
+                btree.remove(&10);
+                btree.remove(&0);
+                btree.insert(20, 284);
+                btree.remove(&12);
+                btree.insert(7, 286);
+                btree.insert(24, 287);
+                btree.remove(&22);
+                btree.insert(13, 289);
+                btree.remove(&19);
+                btree.remove(&13);
+                btree.insert(4, 292);
+                btree.remove(&19);
+                btree.insert(2, 294);
+                btree.remove(&22);
+                btree.remove(&5);
+                btree.remove(&21);
+                btree.remove(&14);
+                btree.remove(&0);
+                btree.remove(&19);
+                btree.remove(&7);
+                btree.insert(4, 302);
+                btree.insert(9, 303);
+                btree.remove(&16);
+                btree.remove(&5);
+                btree.remove(&20);
+                btree.insert(22, 307);
+                btree.remove(&0);
+                btree.remove(&7);
+                btree.remove(&4);
+                btree.insert(19, 311);
+                btree.insert(20, 312);
+                btree.remove(&5);
+                btree.remove(&20);
+                btree.remove(&13);
+                btree.insert(16, 316);
+                btree.remove(&5);
+                btree.remove(&21);
+                btree.insert(9, 319);
+                btree.remove(&23);
+                btree.remove(&13);
+                btree.insert(7, 322);
+                btree.remove(&6);
+                btree.insert(21, 324);
+                btree.remove(&22);
+                btree.remove(&10);
+                btree.remove(&18);
+                btree.remove(&13);
+                btree.insert(23, 329);
+                btree.remove(&17);
+                btree.remove(&11);
+                btree.remove(&8);
+                btree.insert(13, 333);
+                btree.remove(&24);
+                btree.remove(&15);
+                btree.remove(&7);
+                btree.insert(13, 337);
+                btree.insert(19, 338);
+                btree.remove(&18);
+                btree.remove(&3);
+                btree.insert(4, 341);
+                btree.remove(&24);
+                btree.remove(&19);
+                btree.remove(&2);
+                btree.remove(&1);
+                btree.insert(6, 346);
+                btree.insert(2, 347);
+                btree.insert(14, 348);
+                btree.remove(&8);
+                btree.insert(15, 350);
+                btree.insert(2, 351);
+                btree.remove(&12);
+                btree.remove(&20);
+                btree.remove(&4);
+                btree.remove(&19);
+                btree.insert(25, 356);
+                btree.remove(&0);
+                btree.remove(&6);
+                btree.remove(&17);
+                btree.remove(&7);
+                btree.remove(&16);
+                btree.insert(21, 362);
+                btree.insert(3, 363);
+                btree.remove(&10);
+                btree.remove(&17);
+                btree.remove(&9);
+                btree.insert(11, 367);
+                btree.insert(15, 368);
+                btree.insert(16, 369);
+                btree.remove(&19);
+                btree.insert(24, 371);
+                btree.insert(5, 372);
+                btree.remove(&7);
+                btree.remove(&5);
+                btree.insert(9, 375);
+                btree.insert(18, 376);
+                btree.remove(&24);
+                btree.remove(&14);
+                btree.insert(9, 379);
+                btree.remove(&3);
+                btree.remove(&12);
+                btree.remove(&22);
+                btree.remove(&6);
+                btree.remove(&8);
+                btree.remove(&1);
+                btree.remove(&11);
+                btree.insert(25, 387);
+                btree.remove(&24);
+                btree.remove(&3);
+                btree.remove(&15);
+                btree.insert(9, 391);
+                btree.remove(&23);
+                btree.remove(&15);
+                btree.insert(13, 394);
+                btree.remove(&5);
+                btree.remove(&23);
+                btree.insert(6, 397);
+                btree.remove(&6);
+                btree.remove(&4);
+                btree.insert(22, 400);
+                btree.remove(&11);
+                btree.remove(&8);
+                btree.remove(&8);
+                btree.remove(&18);
+                btree.remove(&13);
+                btree.insert(14, 406);
+                btree.remove(&8);
+                btree.insert(24, 408);
+                btree.insert(6, 409);
+                btree.remove(&16);
+                btree.insert(11, 411);
+                btree.insert(14, 412);
+                btree.insert(8, 413);
+                btree.remove(&11);
+                btree.remove(&19);
+                btree.remove(&13);
+                btree.remove(&24);
+                btree.remove(&11);
+                btree.remove(&9);
+                btree.insert(24, 420);
+                btree.remove(&25);
+                btree.remove(&1);
+                btree.remove(&7);
+                btree.insert(12, 424);
+                btree.insert(22, 425);
+                btree.remove(&15);
+                btree.insert(3, 427);
+                btree.insert(3, 428);
+                btree.remove(&7);
+                btree.remove(&24);
+                btree.remove(&14);
+                btree.insert(19, 432);
+                btree.insert(12, 433);
+                btree.remove(&10);
+                btree.remove(&16);
+                btree.remove(&4);
+                btree.insert(7, 437);
+                btree.remove(&18);
+
+                println!();
+                print_bplustree(&btree, DebugOptions::default());
+                println!();
+
+                btree.remove(&21);
             }
         }
 
