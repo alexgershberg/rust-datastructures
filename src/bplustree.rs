@@ -11,9 +11,8 @@ struct Internal<K, V> {
 
 impl<K, V> Internal<K, V>
 where
-    K: Debug,
-    V: Debug,
-    V: Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     fn split(&mut self) -> NonNull<Node<K, V>> {
         let right = self.links.split_off(self.links.len() / 2);
@@ -94,13 +93,7 @@ where
     fn is_root(&self) -> bool {
         self.parent.is_none()
     }
-}
 
-impl<K, V> Internal<K, V>
-where
-    K: Clone + PartialOrd + Debug,
-    V: Clone + Debug,
-{
     unsafe fn new_with_children(
         mut child1_ptr: NonNull<Node<K, V>>,
         mut child2_ptr: NonNull<Node<K, V>>,
@@ -128,13 +121,7 @@ where
 
         internal_ptr
     }
-}
 
-impl<K, V> Internal<K, V>
-where
-    K: Ord + Debug,
-    V: Debug + Clone,
-{
     fn remove(&mut self, k: &K) -> Option<NonNull<Node<K, V>>> {
         let result = self.links.binary_search_by(|(key, _)| key.cmp(k));
         match result {
@@ -299,6 +286,18 @@ where
             .binary_search_by(|(key, _)| key.cmp(k))
             .unwrap_or_else(|index| if index == 0 { index } else { index - 1 })
     }
+
+    fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
+        self.parent
+    }
+
+    fn parent(&self) -> Option<&Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_ref().as_internal()) }
+    }
+
+    fn parent_mut(&mut self) -> Option<&mut Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_mut().as_internal_mut()) }
+    }
 }
 
 #[derive(Debug)]
@@ -309,7 +308,8 @@ struct Leaf<K, V> {
 
 impl<K, V> Leaf<K, V>
 where
-    V: Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     fn new() -> Self {
         Self {
@@ -324,7 +324,7 @@ where
 
         unsafe {
             NonNull::new_unchecked(Box::into_raw(Box::new(Node::Leaf(Leaf {
-                parent: None,
+                parent: self.parent,
                 data: right,
             }))))
         }
@@ -378,12 +378,7 @@ where
     fn is_root(&self) -> bool {
         self.parent.is_none()
     }
-}
 
-impl<K, V> Leaf<K, V>
-where
-    K: Ord,
-{
     fn insert(&mut self, k: K, v: V) -> Option<V> {
         let result = self.data.binary_search_by(|(key, _)| key.cmp(&k));
         let mut pair = (k, v);
@@ -416,6 +411,35 @@ where
 
     fn find_mut(&mut self, k: &K) -> Option<&mut (K, V)> {
         self.data.iter_mut().find(|(key, _)| key == k)
+    }
+
+    fn update_parent_smallest_key(&mut self) {
+        let current_smallest_key = self.smallest_key().clone();
+        let mut current_parent = self.parent_mut();
+        while let Some(parent) = current_parent {
+            let needs_updating = *parent.smallest_key() < current_smallest_key;
+
+            if needs_updating {
+                let k = parent.find_key_mut_less_or_equal_to(&current_smallest_key);
+                *k = current_smallest_key.clone();
+            } else {
+                break;
+            }
+
+            current_parent = parent.parent_mut();
+        }
+    }
+
+    fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
+        self.parent
+    }
+
+    fn parent(&self) -> Option<&Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_ref().as_internal()) }
+    }
+
+    fn parent_mut(&mut self) -> Option<&mut Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_mut().as_internal_mut()) }
     }
 }
 
@@ -455,14 +479,22 @@ enum Node<K, V> {
 
 impl<K, V> Node<K, V>
 where
-    K: Debug,
-    V: Debug + Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
-    fn parent(&self) -> Option<NonNull<Node<K, V>>> {
+    fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
         match self {
             Node::Internal(internal) => internal.parent,
             Node::Leaf(leaf) => leaf.parent,
         }
+    }
+
+    fn parent(&self) -> Option<&Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_ref().as_internal()) }
+    }
+
+    fn parent_mut(&mut self) -> Option<&mut Internal<K, V>> {
+        unsafe { Some(self.parent_raw()?.as_mut().as_internal_mut()) }
     }
 
     /// SAFETY:
@@ -481,16 +513,6 @@ where
             Node::Leaf(leaf) => leaf.keys(),
         }
     }
-
-    // fn smallest_entry(&self) -> &NodeEntry<K, V> {
-    //     match self {
-    //         Node::Internal(internal) => {
-    //             &NodeEntry::Internal(*internal.smallest_entry());
-    //         }
-    //         Node::Leaf(_) => {}
-    //     }
-    //     todo!()
-    // }
 
     fn smallest_key(&self) -> &K {
         match self {
@@ -633,14 +655,7 @@ where
             Node::Leaf(leaf) => leaf.is_root(),
         }
     }
-}
 
-impl<K, V> Node<K, V>
-where
-    K: Ord,
-    K: Ord + Debug,
-    V: Debug + Clone,
-{
     fn update_key_from_smaller_to_bigger(&mut self, k: K) {
         match self {
             Node::Internal(internal) => {
@@ -734,8 +749,8 @@ pub struct BPlusTree<K, V> {
 
 impl<K, V> BPlusTree<K, V>
 where
-    K: Debug,
-    V: Debug + Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     pub fn size(&self) -> usize {
         self.size
@@ -761,13 +776,7 @@ where
 
         unsafe { current.as_ref().largest_key() }
     }
-}
 
-impl<K, V> BPlusTree<K, V>
-where
-    K: Clone + Ord + Debug,
-    V: Clone + Ord + Debug,
-{
     pub fn new(order: usize) -> Self {
         Self {
             order,
@@ -792,8 +801,8 @@ where
             return None;
         }
 
-        let mut node_ptr = self.find_leaf_node(&k).unwrap(); // SAFETY: We checked that root is not None
-        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
+        let mut leaf_ptr = self.find_leaf_node_raw(&k).unwrap(); // SAFETY: We checked that root is not None
+        let leaf = unsafe { leaf_ptr.as_mut().as_leaf_mut() };
 
         let mut need_to_recursively_update_parents = false;
         let smallest_key = leaf.smallest_key();
@@ -807,21 +816,20 @@ where
         }
 
         if need_to_recursively_update_parents {
-            unsafe { self.update_parent_smallest_key(node_ptr) };
+            leaf.update_parent_smallest_key();
         }
 
-        let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() }; // Miri Stacked Borrows rule violation without this line
-        if leaf.size() > self.max_node_size() {
-            let new_leaf_ptr = leaf.split();
-            unsafe {
-                self.insert_into_parent_node(node_ptr, new_leaf_ptr);
-            }
+        let leaf = unsafe { leaf_ptr.as_mut().as_leaf_mut() };
+        let requires_splitting = leaf.size() > self.max_node_size();
+        if requires_splitting {
+            let new_leaf = leaf.split();
+            unsafe { self.insert_into_parent_node(leaf_ptr, new_leaf) };
         }
 
         value
     }
 
-    fn find_leaf_node(&self, k: &K) -> Option<NonNull<Node<K, V>>> {
+    fn find_leaf_node_raw(&self, k: &K) -> Option<NonNull<Node<K, V>>> {
         let root = self.root?;
 
         let mut current = root;
@@ -838,9 +846,19 @@ where
         Some(current)
     }
 
+    fn find_leaf_node(&self, k: &K) -> Option<&Leaf<K, V>> {
+        let mut leaf = self.find_leaf_node_raw(k)?;
+        Some(unsafe { leaf.as_ref().as_leaf() })
+    }
+
+    fn find_leaf_node_mut(&mut self, k: &K) -> Option<&mut Leaf<K, V>> {
+        let mut leaf = self.find_leaf_node_raw(k)?;
+        Some(unsafe { leaf.as_mut().as_leaf_mut() })
+    }
+
     pub fn remove(&mut self, k: &K) -> Option<V> {
         println!("btree.remove(&{k:?});");
-        let mut node_ptr = self.find_leaf_node(k)?;
+        let mut node_ptr = self.find_leaf_node_raw(k)?;
         let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
         let removing_smallest = leaf.smallest_key() == k;
 
@@ -930,9 +948,9 @@ where
         self.find(k).is_some()
     }
 
-    pub fn find(&mut self, k: &K) -> Option<&V> {
+    pub fn find(&self, k: &K) -> Option<&V> {
         let leaf = self.find_leaf_node(k)?;
-        let (_, v) = unsafe { leaf.as_ref() }.as_leaf().find(k)?;
+        let (_, v) = leaf.find(k)?;
         Some(v)
     }
 
@@ -950,7 +968,7 @@ where
         mut new_ptr: NonNull<Node<K, V>>,
     ) {
         let old = unsafe { old_ptr.as_ref() };
-        if let Some(mut parent_ptr) = old.parent() {
+        if let Some(mut parent_ptr) = old.parent_raw() {
             unsafe {
                 let new = new_ptr.as_mut();
 
@@ -1056,7 +1074,7 @@ where
         let node = unsafe { node_ptr.as_ref() };
         let k = node.smallest_key();
 
-        let Some(parent_ptr) = node.parent() else {
+        let Some(parent_ptr) = node.parent_raw() else {
             return (None, None);
         };
 
@@ -1121,7 +1139,7 @@ where
             let k = right.smallest_key().clone();
             let l_smallest = left.smallest_key().clone();
             left.lmerge_into(right);
-            if let Some(mut parent_ptr) = right.parent() {
+            if let Some(mut parent_ptr) = right.parent_raw() {
                 unsafe {
                     let entry = parent_ptr
                         .as_mut()
@@ -1135,7 +1153,7 @@ where
         } else {
             let k = right.smallest_key().clone();
             right.rmerge_into(left);
-            if let Some(mut parent_ptr) = right.parent() {
+            if let Some(mut parent_ptr) = right.parent_raw() {
                 unsafe {
                     self.remove_value_from_node(parent_ptr, &k);
                 }
@@ -1145,7 +1163,7 @@ where
 
     unsafe fn update_parent_smallest_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
         let mut current = unsafe { node_ptr.as_mut() };
-        while let Some(mut parent_ptr) = current.parent() {
+        while let Some(mut parent_ptr) = current.parent_raw() {
             let current_smallest = current.smallest_key().clone();
             let parent = unsafe { parent_ptr.as_mut().as_internal_mut() };
             let needs_updating = *parent.smallest_key() < current_smallest;
@@ -1168,7 +1186,7 @@ where
         V: 'a,
     {
         let mut current = unsafe { node_ptr.as_mut() };
-        while let Some(mut parent_ptr) = current.parent() {
+        while let Some(mut parent_ptr) = current.parent_raw() {
             let parent = unsafe { parent_ptr.as_mut().as_internal_mut() };
             let Some((k, ptr)) = parent.find_entry_mut(&old_key) else {
                 return;
@@ -1206,8 +1224,8 @@ impl<K, V> Drop for BPlusTree<K, V> {
 
 pub fn print_bplustree<K, V>(tree: &BPlusTree<K, V>, options: DebugOptions)
 where
-    K: Debug,
-    V: Clone + Debug,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     let Some(root) = tree.root else {
         println!("Empty");
@@ -1305,8 +1323,8 @@ impl DebugOptions {
 
 unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>, options: DebugOptions)
 where
-    K: Debug,
-    V: Clone + Debug,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     let key_length = if let Some(padding) = options.override_padding {
         padding
@@ -1318,7 +1336,7 @@ where
         let current = unsafe { current_ptr.as_ref() };
         if let Some(key) = k {
             let line = if let Some(ptr_debug_options) = options.show_parent.internal {
-                let formatted_ptr = if let Some(parent_ptr) = current.parent() {
+                let formatted_ptr = if let Some(parent_ptr) = current.parent_raw() {
                     unsafe { format_ptr(parent_ptr, ptr_debug_options) }
                 } else {
                     "null".to_string()
@@ -1383,8 +1401,8 @@ where
 
 unsafe fn format_ptr<K, V>(ptr: NonNull<Node<K, V>>, ptr_debug_options: PtrDebugOptions) -> String
 where
-    K: Debug,
-    V: Debug + Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     let n = unsafe { &*ptr.as_ptr() };
     if !ptr_debug_options.show_values {
@@ -1396,13 +1414,13 @@ where
         Node::Leaf(leaf) => leaf.data.iter().map(|(k, _)| k).collect::<Vec<_>>(),
     };
 
-    format!("({ptr:p}): {:?} | parent: {:?}", data, n.parent())
+    format!("({ptr:p}): {:?} | parent: {:?}", data, n.parent_raw())
 }
 
 unsafe fn print_ptr<K, V>(ptr: NonNull<Node<K, V>>)
 where
-    K: Debug,
-    V: Debug + Clone,
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
 {
     unsafe {
         println!("{}", format_ptr(ptr, PtrDebugOptions::default().values()));
@@ -1920,9 +1938,9 @@ mod tests {
                                                     (12345,   51):    5
                 _               */
 
-                let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
-                let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
-                assert_eq!(leaf1.parent(), leaf2.parent());
+                let leaf1 = btree.find_leaf_node(&(12345, 4)).unwrap();
+                let leaf2 = btree.find_leaf_node(&(12345, 14)).unwrap();
+                assert_eq!(leaf1.parent_raw(), leaf2.parent_raw());
 
                 btree.insert((12345, 22), 13);
                 println!();
@@ -1947,9 +1965,9 @@ mod tests {
                                                        (12345,   50):    8
                 */
 
-                let leaf1 = unsafe { btree.find_leaf_node(&(12345, 4)).unwrap().as_ref() };
-                let leaf2 = unsafe { btree.find_leaf_node(&(12345, 14)).unwrap().as_ref() };
-                assert_ne!(leaf1.parent(), leaf2.parent());
+                let leaf1 = btree.find_leaf_node(&(12345, 4)).unwrap();
+                let leaf2 = btree.find_leaf_node(&(12345, 14)).unwrap();
+                assert_ne!(leaf1.parent_raw(), leaf2.parent_raw());
             }
         }
 
@@ -1972,10 +1990,99 @@ mod tests {
                 btree.insert(10, 2);
                 btree.insert(15, 3);
 
+                let options = DebugOptions::default();
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
                 assert_eq!(btree.remove(&0), Some(0));
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
                 assert_eq!(btree.remove(&0), None);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
                 assert_eq!(btree.remove(&20), None);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
                 assert_eq!(btree.size(), 3);
+            }
+
+            #[test]
+            fn remove_until_empty() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
+
+                let options = DebugOptions::default();
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&0);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&5);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&10);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&15);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                assert_eq!(btree.size(), 0);
+
+                assert!(btree.root.is_none());
+            }
+
+            #[test]
+            fn remove_from_2_level_tree_until_empty() {
+                let mut btree = BPlusTree::new(4);
+                btree.insert(0, 0);
+                btree.insert(5, 1);
+                btree.insert(10, 2);
+                btree.insert(15, 3);
+                btree.insert(20, 4);
+
+                let options = DebugOptions::default();
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&5);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&10);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
             }
 
             #[test]
@@ -3193,10 +3300,7 @@ mod tests {
             fn find_leaf_node_1() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert((12345, 1), 0);
-                let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
-                let Node::Leaf(leaf) = node else {
-                    unreachable!()
-                };
+                let leaf = btree.find_leaf_node_mut(&(12345, 2)).unwrap();
                 assert_eq!(leaf.data[0], ((12345, 1), 0));
             }
 
@@ -3206,10 +3310,7 @@ mod tests {
                 btree.insert((12345, 1), 0);
                 btree.insert((12345, 3), 1);
                 btree.insert((12345, 5), 2);
-                let node = unsafe { btree.find_leaf_node(&(12345, 2)).unwrap().as_ref() };
-                let Node::Leaf(leaf) = node else {
-                    unreachable!()
-                };
+                let leaf = btree.find_leaf_node(&(12345, 2)).unwrap();
                 assert_eq!(leaf.data[0], ((12345, 1), 0));
             }
 
@@ -3226,10 +3327,9 @@ mod tests {
                 print_bplustree(&btree, DebugOptions::default());
                 println!();
 
-                let node_ptr = btree.find_leaf_node(&0).unwrap();
-                let node = unsafe { node_ptr.as_ref().as_leaf() };
-                assert_eq!(node.data[0], (0, 0));
-                assert_eq!(node.data[1], (5, 1));
+                let leaf = btree.find_leaf_node_mut(&0).unwrap();
+                assert_eq!(leaf.data[0], (0, 0));
+                assert_eq!(leaf.data[1], (5, 1));
             }
 
             #[test]
@@ -3245,10 +3345,9 @@ mod tests {
                 print_bplustree(&btree, DebugOptions::default());
                 println!();
 
-                let node_ptr = btree.find_leaf_node(&7).unwrap();
-                let node = unsafe { node_ptr.as_ref().as_leaf() };
-                assert_eq!(node.data[0], (0, 0));
-                assert_eq!(node.data[1], (5, 1));
+                let leaf = btree.find_leaf_node_mut(&7).unwrap();
+                assert_eq!(leaf.data[0], (0, 0));
+                assert_eq!(leaf.data[1], (5, 1));
             }
         }
     }
