@@ -1,5 +1,4 @@
 use std::collections::VecDeque;
-use std::env::current_exe;
 use std::fmt::Debug;
 use std::mem::swap;
 use std::ptr::NonNull;
@@ -80,26 +79,15 @@ where
     }
 
     fn rmerge_into(&mut self, other: &mut Internal<K, V>) {
-        println!("rmerge_into: before parent update: {:?}", self.links);
         for (k, node_ptr) in &mut self.links {
             unsafe {
-                print_ptr(*node_ptr);
                 let node = node_ptr.as_mut();
                 node.set_parent(other.parent);
-                print_ptr(*node_ptr);
             }
         }
-        println!("rmerge_into: after parent update: {:?}", self.links);
 
         other.links.append(&mut self.links);
 
-        println!("other: {other:?}");
-        for (k, ptr) in &other.links {
-            println!("k: {k:?}");
-            unsafe {
-                print_ptr(*ptr);
-            }
-        }
         // self.parent = None // TODO: Maybe not?
     }
 
@@ -163,12 +151,8 @@ where
         k: K,
         ptr: NonNull<Node<K, V>>,
     ) -> Option<NonNull<Node<K, V>>> {
-        println!("insert or replace for k: {k:?} | ptr: {ptr:?}");
-        print_ptr(ptr);
         let insert = self.links.is_empty();
-
         let index = self.less_or_equal_to_index(&k);
-        println!("index: {index:?}");
         if insert {
             self.links.insert(index, (k, ptr));
             None
@@ -218,7 +202,6 @@ where
         );
 
         let index = self.links.binary_search_by(|(key, _)| key.cmp(k)).ok()?;
-        // .unwrap_or_else(|index| if index == 0 { index } else { index - 1 });
 
         Some(&self.links[index])
     }
@@ -230,7 +213,6 @@ where
         );
 
         let index = self.links.binary_search_by(|(key, _)| key.cmp(k)).ok()?;
-        // .unwrap_or_else(|index| if index == 0 { index } else { index - 1 })
 
         Some(&mut self.links[index])
     }
@@ -850,22 +832,11 @@ where
             };
 
             let left_value = internal.find_value_less_or_equal_to(k);
-            println!("left value: {left_value:?} | current: {node:?}");
             current = left_value;
         }
 
         Some(current)
     }
-
-    /*
-    i 0, 25, 125, 17, 93, 56, 72, 7, 22, 14, 99, 105, 555, 2, 8, 13, 6, 5, 3, -20, -150, 107, 140, 155
-    r 93
-
-    [-150, 3]
-    [-150, -20]       [3, 25, 99]
-    [-150, -20]       [3, 7, 14]                               [25, 72]          [99, 107, 140]
-    [-150, -20, 0, 2] [3, 5, 6] [7, 8, 13] [14, 17, 22]        [25, 56] [72, *93*] [99, 105] [107, 125] [140, 155, 555]
-    */
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
         println!("btree.remove(&{k:?});");
@@ -908,7 +879,6 @@ where
     ) -> Option<NodeValue<K, V>> {
         let node = unsafe { node_ptr.as_mut() };
 
-        println!("remove_value_from_node: {node:?} | k: {k:?}");
         let removing_smallest = node.smallest_key() == k;
 
         let value = node.remove_key(k)?;
@@ -929,13 +899,9 @@ where
         mut node_ptr: NonNull<Node<K, V>>,
         k: &K,
         ptr: &mut NonNull<Node<K, V>>,
-    ) -> bool
-// -> Option<NodeValue<K, V>>
-    {
-        // let k = entry.key();
+    ) -> bool {
         let node = unsafe { node_ptr.as_mut() };
 
-        println!("remove_value_from_internal_node: {node:?} | k: {k:?}");
         let removing_smallest = node.smallest_key() == k;
 
         let Some(mut value) = node.as_internal_mut().remove(k) else {
@@ -948,9 +914,6 @@ where
             child.set_parent(Some(node_ptr));
         }
 
-        println!("ptr: {ptr:?}");
-        print_ptr(*ptr);
-
         if removing_smallest {
             unsafe { self.update_parent_smallest_key(node_ptr) };
         }
@@ -961,7 +924,6 @@ where
         }
 
         true
-        // Some(value)
     }
 
     pub fn contains(&mut self, k: &K) -> bool {
@@ -1056,7 +1018,6 @@ where
             }
         }
 
-        println!("transfer_or_merge | l: {left_neighbour:?} | r: {right_neighbour:?}");
         // Merge
         if let Some(neighbour_ptr) = left_neighbour {
             unsafe { self.merge(neighbour_ptr, node_ptr) };
@@ -1069,15 +1030,10 @@ where
         }
 
         let node = unsafe { node_ptr.as_ref() };
-        println!("node: {node:?}");
         assert!(
             node.is_root(),
             "No neighbours to left, no neighbours to the right, this must be the root"
         );
-
-        println!("transfer_or_merge, about to collapse the tree!");
-        print_bplustree(self, DebugOptions::default().leaf_values().leaf_address());
-        println!("transfer_or_merge, about to collapse the tree!");
 
         let old = self.root.expect("There must have been a root node");
 
@@ -1090,12 +1046,7 @@ where
             Node::Leaf(leaf) => None,
         };
 
-        println!("transfer_or_merge, after collapse");
-        print_bplustree(self, DebugOptions::default().leaf_values().leaf_address());
-        println!("transfer_or_merge, after collapse");
-        println!("old: {old:?}");
-
-        // let _ = unsafe { Box::from_raw(old.as_ptr()) };
+        let _ = unsafe { Box::from_raw(old.as_ptr()) };
     }
 
     unsafe fn get_node_neighbours(
@@ -1140,13 +1091,9 @@ where
             let new = right.smallest_key();
 
             left.insert_largest_entry(entry);
-            println!("transfer");
-            print_bplustree(self, DebugOptions::default());
-            println!("transfer");
             unsafe {
                 self.update_parent_key(right_ptr, old, &new);
             }
-            // right_ptr
         } else {
             let entry = left.remove_largest_entry();
 
@@ -1157,7 +1104,6 @@ where
             unsafe {
                 self.update_parent_key(right_ptr, old, new);
             }
-            // left_ptr
         };
     }
 
@@ -1172,20 +1118,9 @@ where
         let r_size = right.size();
 
         if l_size < r_size {
-            println!("left < right");
             let k = right.smallest_key().clone();
-            // let v = right.smallest_value();
-            // let entry = NodeEntry::new(k, v);
-
             let l_smallest = left.smallest_key().clone();
-            println!("left.lmerge_into(right)");
             left.lmerge_into(right);
-            println!("right: {right:?}");
-
-            println!("merge");
-            print_bplustree(self, DebugOptions::default().leaf_address().leaf_values());
-            println!("merge");
-
             if let Some(mut parent_ptr) = right.parent() {
                 unsafe {
                     let entry = parent_ptr
@@ -1198,92 +1133,22 @@ where
                 }
             }
         } else {
-            println!("left >= right");
-
             let k = right.smallest_key().clone();
-            println!("right.rmerge_into(left)");
-            println!("before rmerge: left: {left:?} | right: {right:?} ");
             right.rmerge_into(left);
-            println!("after rmerge: left: {left:?} | right: {right:?} ");
-
-            // println!("merge BEFORE remove_value_from_node");
-            // print_bplustree(self, DebugOptions::default().leaf_address().leaf_values());
-            // println!("merge BEFORE remove_value_from_node");
-
             if let Some(mut parent_ptr) = right.parent() {
                 unsafe {
                     self.remove_value_from_node(parent_ptr, &k);
                 }
             }
-
-            println!("merge AFTER remove_value_from_node");
-            print_bplustree(self, DebugOptions::default().leaf_address().leaf_values());
-            println!("merge AFTER remove_value_from_node");
         };
     }
 
-    // unsafe fn handle_parent_size_change(&mut self, current_ptr: NonNull<Node<K, V>>) {
-    //     let current = unsafe { current_ptr.as_ref() };
-    //     if current.is_root() {
-    //         todo!("Should just return here")
-    //     }
-    //
-    //     if let Some(parent_ptr) = current.parent() {
-    //         let parent = unsafe { parent_ptr.as_ref() };
-    //         if parent.size() < self.min_node_size() {
-    //             todo!();
-    //             self.transfer_or_merge(parent_ptr);
-    //             todo!()
-    //         }
-    //     }
-    // }
-
-    /*
-
-                       0  ->     0  ->     0:    0
-                                           5:    1
-
-                                10  ->    10:    2
-                                          15:    3
-
-                      35  ->    35  ->    35:    7
-                                          40:    8
-
-                                45  ->    45:    9
-                                          50:   10
-
-                            remove 35
-
-                       0  ->     0  ->     0:    0
-                                           5:    1
-
-                                10  ->    10:    2
-                                          15:    3
-
-                      40  ->    40  ->    ?????????
-                                          40:    8
-                                          45:    9
-                                          50:   10
-
-                            remove 40
-
-
-
-    */
-
     unsafe fn update_parent_smallest_key(&self, mut node_ptr: NonNull<Node<K, V>>) {
-        println!("update_parent_smallest_key BEGIN");
-        print_bplustree(self, DebugOptions::default().leaf_values().leaf_address());
-        println!("update_parent_smallest_key BEGIN");
         let mut current = unsafe { node_ptr.as_mut() };
-        println!("current: {current:?}");
         while let Some(mut parent_ptr) = current.parent() {
             let current_smallest = current.smallest_key().clone();
             let parent = unsafe { parent_ptr.as_mut().as_internal_mut() };
-            println!("parent: {parent:?}");
-            print_ptr(parent_ptr);
             let needs_updating = *parent.smallest_key() < current_smallest;
-            println!("parent needs_updating: {needs_updating}");
             if needs_updating {
                 let k = parent.find_key_mut_less_or_equal_to(&current_smallest);
                 *k = current_smallest.clone();
@@ -1292,51 +1157,7 @@ where
             }
             current = unsafe { parent_ptr.as_mut() };
         }
-
-        println!("update_parent_smallest_key END");
-        print_bplustree(self, DebugOptions::default().leaf_address().leaf_values());
-        println!("update_parent_smallest_key END");
-
-        // panic!()
     }
-
-    // unsafe fn update_parent_key_from_smaller_to_bigger(&self, mut node_ptr: NonNull<Node<K, V>>) {
-    //     let node = unsafe { node_ptr.as_mut() };
-    //     let mut current = node;
-    //     while let Some(mut parent_ptr) = current.parent() {
-    //         let smallest = current.smallest_key().clone();
-    //         let parent = unsafe { parent_ptr.as_mut() };
-    //         parent.update_key_from_smaller_to_bigger(smallest.clone());
-    //
-    //         current = parent;
-    //     }
-    // }
-    //
-    // unsafe fn update_parent_key_from_bigger_to_smaller(&self, mut node_ptr: NonNull<Node<K, V>>) {
-    //     let node = unsafe { node_ptr.as_mut() };
-    //
-    //     let mut current = node;
-    //     while let Some(mut parent_ptr) = current.parent() {
-    //         let parent = unsafe { parent_ptr.as_mut() };
-    //         let smallest = current.smallest_key().clone();
-    //         parent.update_key_from_bigger_to_smaller(smallest.clone());
-    //
-    //         current = parent;
-    //     }
-    // }
-
-    /*
-
-          [0, 3, 25, 50]
-          [0, 1, 2]  [3, 4] [25, 33, 37] [50, 51, 55, 90]
-
-       Remove 3
-
-          [0, 4, 25, 50]
-          [0, 1] -> [2, 4] [25, 33, 37] [50, 51, 55, 90]
-
-
-    */
 
     unsafe fn update_parent_key<'a>(
         &self,
@@ -1348,7 +1169,6 @@ where
     {
         let mut current = unsafe { node_ptr.as_mut() };
         while let Some(mut parent_ptr) = current.parent() {
-            println!("old: {old_key:?} | new: {new_key:?} | current: {current:?}");
             let parent = unsafe { parent_ptr.as_mut().as_internal_mut() };
             let Some((k, ptr)) = parent.find_entry_mut(&old_key) else {
                 return;
@@ -1361,43 +1181,6 @@ where
             current = unsafe { parent_ptr.as_mut() };
         }
     }
-
-    // unsafe fn remove_key_from_hierarchy(&mut self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
-    //     let node = unsafe { node_ptr.as_mut() };
-    //     let mut current = node;
-    //     while let Some(mut parent_ptr) = current.parent() {
-    //         let parent = unsafe { parent_ptr.as_mut() };
-    //         unsafe {
-    //             self.remove_key_from_node(parent_ptr, k);
-    //         }
-    //         current = parent;
-    //     }
-    // }
-
-    // unsafe fn remove_key_from_single_parent(&mut self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
-    //     let node = unsafe { node_ptr.as_mut() };
-    //     if let Some(parent_ptr) = node.parent() {
-    //         unsafe {
-    //             self.remove_key_from_node(parent_ptr, k);
-    //         }
-    //     }
-    // }
-    //
-    // unsafe fn remove_key_from_node(&mut self, mut node_ptr: NonNull<Node<K, V>>, k: &K) {
-    //     let node = unsafe { node_ptr.as_mut() };
-    //     if let Some(NodeValue::Internal(ptr)) = node.remove_key(k) {
-    //         let node = unsafe { ptr.as_ref() };
-    //         let size = node.size();
-    //         if size == 0 {
-    //             let _ = unsafe { Box::from_raw(ptr.as_ptr()) };
-    //         }
-    //     }
-    //
-    //     let size = node.size();
-    //     if size < self.min_node_size() {
-    //         unsafe { self.transfer_or_merge(node_ptr) };
-    //     }
-    // }
 }
 
 impl<K, V> Drop for BPlusTree<K, V> {
@@ -1715,7 +1498,7 @@ mod tests {
             #[test]
             fn insert_multiple_values() {
                 let mut btree = BPlusTree::new(4);
-                let options = DebugOptions::default().all_address();
+                let options = DebugOptions::default().leaf_values().leaf_address();
                 print_bplustree(&btree, options);
                 println!();
 
@@ -1749,7 +1532,7 @@ mod tests {
             #[test]
             fn insert_5_values() {
                 let mut btree = BPlusTree::new(4);
-                let options = DebugOptions::default().all_address();
+                let options = DebugOptions::default().leaf_values().leaf_address();
 
                 println!();
                 print_bplustree(&btree, options);
@@ -2689,13 +2472,13 @@ mod tests {
                 btree.insert(17, 12);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&20);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&25);
@@ -2725,7 +2508,7 @@ mod tests {
                 btree.remove(&45);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 // btree.remove(&50);
