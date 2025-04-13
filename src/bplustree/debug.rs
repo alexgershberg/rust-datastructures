@@ -1,8 +1,23 @@
 use crate::bplustree::BPlusTree;
+use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::Node;
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ptr::NonNull;
+
+pub fn create_leaf<K, V>(k: K, v: V) -> NonNull<Node<K, V>> {
+    let leaf = Node::Leaf(Leaf {
+        parent: None,
+        data: vec![(k, v)],
+    });
+    unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(leaf))) }
+}
+
+pub unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
+    unsafe {
+        let _ = Box::from_raw(ptr.as_ptr());
+    }
+}
 
 pub fn print_bplustree<K, V>(tree: &BPlusTree<K, V>, options: DebugOptions)
 where
@@ -22,12 +37,12 @@ where
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-struct PtrDebugOptions {
+pub struct PtrDebugOptions {
     show_values: bool,
 }
 
 impl PtrDebugOptions {
-    fn values(self) -> Self {
+    pub fn values(self) -> Self {
         Self { show_values: true }
     }
 }
@@ -71,7 +86,7 @@ impl DebugOptions {
         let ptr_debug_options = if let Some(ptr_debug_options) = self.show_parent.leaf {
             ptr_debug_options
         } else {
-            PtrDebugOptions::default().values()
+            PtrDebugOptions::default()
         };
 
         self.show_parent.leaf = Some(ptr_debug_options);
@@ -103,7 +118,7 @@ impl DebugOptions {
     }
 }
 
-pub unsafe fn print_node<K, V>(ptr: NonNull<Node<K, V>>, options: DebugOptions)
+pub unsafe fn print_node<K, V>(root: NonNull<Node<K, V>>, options: DebugOptions)
 where
     K: Ord + PartialOrd + Clone + Debug,
     V: Ord + PartialOrd + Clone + Debug,
@@ -113,16 +128,12 @@ where
     } else {
         4
     };
-    let mut stack = VecDeque::from([(None, 0, false, ptr, -1)]);
-    while let Some((k, mut offset, ignore_offset, current_ptr, lvl)) = stack.pop_front() {
+    let mut stack = VecDeque::from([(None, 0, false, root, -1)]);
+    while let Some((pair, mut offset, ignore_offset, current_ptr, lvl)) = stack.pop_front() {
         let current = unsafe { current_ptr.as_ref() };
-        if let Some(key) = k {
+        if let Some((key, origin_ptr)) = pair {
             let line = if let Some(ptr_debug_options) = options.show_parent.internal {
-                let formatted_ptr = if let Some(parent_ptr) = current.parent_raw() {
-                    unsafe { format_ptr(parent_ptr, ptr_debug_options) }
-                } else {
-                    "null".to_string()
-                };
+                let formatted_ptr = unsafe { format_node_ptr(origin_ptr, ptr_debug_options) };
                 format!("{} {key:key_length$?}  ->  ", formatted_ptr)
             } else {
                 format!("{key:key_length$?}  ->  ")
@@ -140,25 +151,28 @@ where
 
         match current {
             Node::Internal(internal) => {
-                for (index, (k, ptr)) in internal.links.iter().rev().enumerate() {
+                for (index, (k, child_ptr)) in internal.links.iter().rev().enumerate() {
                     let last = index == internal.links.len() - 1;
                     let mut ignore_offset = false;
                     if last {
                         ignore_offset = true
                     }
-                    stack.push_front((Some(k), offset, ignore_offset, *ptr, lvl + 1));
+                    stack.push_front((
+                        Some((k, current_ptr)),
+                        offset,
+                        ignore_offset,
+                        *child_ptr,
+                        lvl + 1,
+                    ));
                 }
             }
             Node::Leaf(leaf) => {
                 let mut first = true;
                 for (k, v) in &leaf.data {
                     let line = if let Some(ptr_debug_options) = options.show_parent.leaf {
-                        let formatted_ptr = if let Some(parent) = leaf.parent_raw() {
-                            unsafe { format_ptr(parent, ptr_debug_options) }
-                        } else {
-                            "null".to_string()
-                        };
-                        format!("({}) {k:key_length$?}: {v:key_length$?}", formatted_ptr)
+                        let formatted_ptr =
+                            unsafe { format_node_ptr(current_ptr, ptr_debug_options) };
+                        format!("{} {k:key_length$?}: {v:key_length$?}", formatted_ptr)
                     } else {
                         format!("{k:key_length$?}: {v:key_length$?}")
                     };
@@ -181,7 +195,17 @@ where
     }
 }
 
-pub unsafe fn format_ptr<K, V>(
+/*
+  [0x500000000] (123456, 10) -> [0x300000000] (123456, 10)
+                                              (123456, 12)
+                                              (123456, 13)
+                                              (123456, 14)
+
+  [0x900000000] (123456, 25) -> [0x700000000] (123456, 25)
+                                              (123456, 35)
+*/
+
+pub unsafe fn format_node_ptr<K, V>(
     ptr: NonNull<Node<K, V>>,
     ptr_debug_options: PtrDebugOptions,
 ) -> String
@@ -190,24 +214,86 @@ where
     V: Ord + PartialOrd + Clone + Debug,
 {
     let n = unsafe { &*ptr.as_ptr() };
+    let parent_ptr = n.parent_raw();
     if !ptr_debug_options.show_values {
-        return format!("({ptr:p})",);
+        return format!("[{ptr:p} | parent: {parent_ptr:?}]");
     }
 
-    let data = match n {
-        Node::Internal(internal) => internal.links.iter().map(|(k, _)| k).collect::<Vec<_>>(),
-        Node::Leaf(leaf) => leaf.data.iter().map(|(k, _)| k).collect::<Vec<_>>(),
-    };
-
-    format!("({ptr:p}): {:?} | parent: {:?}", data, n.parent_raw())
+    if let Some(parent) = parent_ptr {
+        let parent = unsafe { parent.as_ref() };
+        let parent_data = match parent {
+            Node::Internal(internal) => internal.links.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+            Node::Leaf(leaf) => leaf.data.iter().map(|(k, _)| k).collect::<Vec<_>>(),
+        };
+        format!("[{ptr:p} | parent: {:?}: {:?}]", parent_ptr, parent_data)
+    } else {
+        format!("[{ptr:p} | parent: {:?}]", parent_ptr)
+    }
 }
 
-pub unsafe fn print_ptr<K, V>(ptr: NonNull<Node<K, V>>)
+pub unsafe fn print_node_ptr<K, V>(ptr: NonNull<Node<K, V>>)
 where
     K: Ord + PartialOrd + Clone + Debug,
     V: Ord + PartialOrd + Clone + Debug,
 {
     unsafe {
-        println!("{}", format_ptr(ptr, PtrDebugOptions::default().values()));
+        println!(
+            "{}",
+            format_node_ptr(ptr, PtrDebugOptions::default().values())
+        );
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::bplustree::debug::{
+        DebugOptions, PtrDebugOptions, cleanup_leaf, create_leaf, format_node_ptr, print_node,
+        print_node_ptr,
+    };
+    use crate::bplustree::internal::Internal;
+    use crate::bplustree::node::Node;
+    use std::ptr::NonNull;
+
+    #[test]
+    fn print_1() {
+        let mut leaf1 = create_leaf(0, 0);
+        let mut leaf2 = create_leaf(5, 1);
+        let mut leaf3 = create_leaf(10, 2);
+
+        let internal = unsafe {
+            NonNull::new_unchecked(Box::into_raw(Box::new(Node::Internal(Internal {
+                parent: Some(leaf1),
+                links: vec![(0, leaf1), (5, leaf2), (10, leaf3)],
+            }))))
+        };
+
+        unsafe {
+            leaf1.as_mut().set_parent(Some(internal));
+            leaf2.as_mut().set_parent(Some(internal));
+            leaf3.as_mut().set_parent(Some(internal));
+
+            print_node(internal, DebugOptions::default().all_values());
+            println!();
+            println!();
+            println!();
+            print_node(internal, DebugOptions::default().all_address());
+            println!();
+            println!();
+            println!();
+            print_node(internal, DebugOptions::default().leaf_address());
+            println!();
+            println!();
+            println!();
+            print_node(internal, DebugOptions::default().internal_address());
+            println!();
+            println!();
+            println!();
+            print_node(internal, DebugOptions::default().internal_values());
+
+            cleanup_leaf(internal);
+            cleanup_leaf(leaf1);
+            cleanup_leaf(leaf2);
+            cleanup_leaf(leaf3);
+        }
     }
 }

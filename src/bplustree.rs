@@ -1,4 +1,4 @@
-use crate::bplustree::debug::{DebugOptions, print_bplustree, print_ptr};
+use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
 use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::{Node, NodeValue};
@@ -343,7 +343,7 @@ where
         };
 
         println!("freeing old root:");
-        print_ptr(old);
+        print_node_ptr(old);
         // let _ = unsafe { Box::from_raw(old.as_ptr()) };
     }
 
@@ -442,7 +442,7 @@ where
 
                 if let Some(ptr) = ptr {
                     println!("freeing ptr we got from removed_value_from_node 1");
-                    print_ptr(ptr);
+                    print_node_ptr(ptr);
                     let _ = Box::from_raw(ptr.as_ptr());
                 }
             }
@@ -457,7 +457,7 @@ where
                         self.remove_value_from_node(right_parent_ptr, &r_smallest)
                     {
                         println!("freeing ptr we got from removed_value_from_node 2");
-                        print_ptr(ptr);
+                        print_node_ptr(ptr);
                         let _ = Box::from_raw(ptr.as_ptr());
                     }
                 }
@@ -581,7 +581,7 @@ mod tests {
                 btree.insert((12345, 5), 1);
                 btree.insert((12345, 10), 2);
                 btree.insert((12345, 15), 3);
-                btree.insert((12345, 20), 4);
+                // btree.insert((12345, 20), 4);
                 print_bplustree(&btree, options);
             }
 
@@ -1074,7 +1074,7 @@ mod tests {
 
         mod remove {
             use crate::bplustree::BPlusTree;
-            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_ptr};
+            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
             use crate::bplustree::tests::LevelIterator;
 
             #[test]
@@ -1184,7 +1184,7 @@ mod tests {
 
                 println!("after all ops");
                 unsafe {
-                    print_ptr(btree.root.unwrap());
+                    print_node_ptr(btree.root.unwrap());
                 }
 
                 println!();
@@ -1676,7 +1676,10 @@ mod tests {
 
             #[test]
             fn remove_and_collapse_2() {
-                let options = DebugOptions::default().leaf_address().leaf_values();
+                let options = DebugOptions::default()
+                    .leaf_address()
+                    .leaf_values()
+                    .internal_address();
                 let mut btree = BPlusTree::new(4);
                 for i in 0..=10 {
                     btree.insert(5 * i, i);
@@ -2461,23 +2464,9 @@ mod tests {
         }
     }
 
-    fn create_leaf<K, V>(k: K, v: V) -> NonNull<Node<K, V>> {
-        let leaf = Node::Leaf(Leaf {
-            parent: None,
-            data: vec![(k, v)],
-        });
-        unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(leaf))) }
-    }
-
-    unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
-        unsafe {
-            let _ = Box::from_raw(ptr.as_ptr());
-        }
-    }
-
     mod internal {
         use crate::bplustree::Internal;
-        use crate::bplustree::tests::{cleanup_leaf, create_leaf};
+        use crate::bplustree::debug::{cleanup_leaf, create_leaf};
 
         #[test]
         fn find() {
@@ -2597,9 +2586,8 @@ mod tests {
     }
 
     mod leaf {
-        use crate::bplustree::debug::print_ptr;
+        use crate::bplustree::debug::{cleanup_leaf, print_node_ptr};
         use crate::bplustree::leaf::Leaf;
-        use crate::bplustree::tests::cleanup_leaf;
 
         #[test]
         fn split_1() {
@@ -2615,7 +2603,7 @@ mod tests {
             let new_leaf = leaf.split();
             assert_eq!(leaf.size(), 4);
             unsafe {
-                print_ptr(new_leaf);
+                print_node_ptr(new_leaf);
                 cleanup_leaf(new_leaf);
             }
             println!("{leaf:?}");
