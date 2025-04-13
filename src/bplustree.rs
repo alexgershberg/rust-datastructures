@@ -1,3 +1,4 @@
+use crate::bplustree::debug::{DebugOptions, print_bplustree, print_ptr};
 use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::{Node, NodeValue};
@@ -290,11 +291,16 @@ where
     }
 
     unsafe fn transfer_or_merge(&mut self, mut node_ptr: NonNull<Node<K, V>>) {
+        println!("transfer_or_merge");
+        print_bplustree(self, DebugOptions::default().leaf_address());
+        println!("transfer_or_merge");
+
         let (left_neighbour, right_neighbour) = unsafe { self.get_node_neighbours(node_ptr) };
 
         if let Some(neighbour_ptr) = left_neighbour {
             let neighbour = unsafe { neighbour_ptr.as_ref() };
             if neighbour.size() > self.min_node_size() {
+                unsafe { self.transfer(neighbour_ptr, node_ptr) };
                 return;
             }
         }
@@ -314,6 +320,7 @@ where
         }
 
         if let Some(neighbour_ptr) = right_neighbour {
+            println!("Merge left into right");
             unsafe { self.merge(node_ptr, neighbour_ptr) };
             return;
         }
@@ -324,18 +331,20 @@ where
             "No neighbours to left, no neighbours to the right, this must be the root"
         );
 
-        let old = self.root.expect("There must have been a root node");
+        let old = self.root.take().expect("There must have been a root node");
 
         self.root = match node {
             Node::Internal(internal) => {
-                let mut new_root = internal.links[0].1;
+                let mut new_root = internal.smallest_value();
                 unsafe { new_root.as_mut().set_parent(None) };
                 Some(new_root)
             }
             Node::Leaf(leaf) => None,
         };
 
-        let _ = unsafe { Box::from_raw(old.as_ptr()) };
+        println!("freeing old root:");
+        print_ptr(old);
+        // let _ = unsafe { Box::from_raw(old.as_ptr()) };
     }
 
     unsafe fn get_node_neighbours(
@@ -407,26 +416,50 @@ where
         let r_size = right.size();
 
         if l_size < r_size {
-            let k = right.smallest_key().clone();
+            println!("l_size < r_size");
             let l_smallest = left.smallest_key().clone();
+            let r_smallest = right.smallest_key().clone();
             left.lmerge_into(right);
-            if let Some(mut parent_ptr) = right.parent_raw() {
-                unsafe {
-                    let entry = parent_ptr
-                        .as_mut()
-                        .as_internal_mut()
-                        .find_entry_mut(&l_smallest)
-                        .unwrap();
-                    let ptr = &mut entry.1;
-                    if self.remove_value_from_internal_node(parent_ptr, &k, ptr) {}
+
+            if let Some(right_parent_ptr) = right.parent_raw() {
+                let ptr = if let Some(NodeValue::Internal(ptr)) =
+                    self.remove_value_from_node(right_parent_ptr, &l_smallest)
+                {
+                    Some(ptr)
+                } else {
+                    None
+                };
+
+                let right = unsafe { right_ptr.as_mut() };
+                if let Some(mut right_parent_ptr) = right.parent_raw() {
+                    let parent = unsafe { right_parent_ptr.as_mut().as_internal_mut() };
+                    if let Some((r_smallest_key, _)) = parent.find_entry_mut(&r_smallest) {
+                        *r_smallest_key = l_smallest.clone();
+
+                        self.update_parent_key(right_parent_ptr, r_smallest, &l_smallest);
+                    }
+                }
+
+                if let Some(ptr) = ptr {
+                    println!("freeing ptr we got from removed_value_from_node 1");
+                    print_ptr(ptr);
+                    let _ = Box::from_raw(ptr.as_ptr());
                 }
             }
+
+            println!("l_size < r_size end")
         } else {
-            let k = right.smallest_key().clone();
+            let r_smallest = right.smallest_key().clone();
             right.rmerge_into(left);
-            if let Some(mut parent_ptr) = right.parent_raw() {
+            if let Some(right_parent_ptr) = right.parent_raw() {
                 unsafe {
-                    self.remove_value_from_node(parent_ptr, &k);
+                    if let Some(NodeValue::Internal(ptr)) =
+                        self.remove_value_from_node(right_parent_ptr, &r_smallest)
+                    {
+                        println!("freeing ptr we got from removed_value_from_node 2");
+                        print_ptr(ptr);
+                        let _ = Box::from_raw(ptr.as_ptr());
+                    }
                 }
             }
         };
@@ -1041,7 +1074,7 @@ mod tests {
 
         mod remove {
             use crate::bplustree::BPlusTree;
-            use crate::bplustree::debug::{DebugOptions, print_bplustree};
+            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_ptr};
             use crate::bplustree::tests::LevelIterator;
 
             #[test]
@@ -1148,6 +1181,11 @@ mod tests {
                 println!();
 
                 btree.remove(&10);
+
+                println!("after all ops");
+                unsafe {
+                    print_ptr(btree.root.unwrap());
+                }
 
                 println!();
                 print_bplustree(&btree, options);
@@ -1675,18 +1713,18 @@ mod tests {
                 print_bplustree(&btree, options);
                 println!();
 
-                btree.remove(&40);
+                // btree.remove(&40);
+                //
+                // println!();
+                // print_bplustree(&btree, options);
+                // println!();
 
-                println!();
-                print_bplustree(&btree, options);
-                println!();
-
-                btree.remove(&45);
-
-                println!();
-                print_bplustree(&btree, options);
-                println!();
-
+                // btree.remove(&45);
+                //
+                // println!();
+                // print_bplustree(&btree, options);
+                // println!();
+                //
                 // btree.remove(&50);
                 //
                 // println!();

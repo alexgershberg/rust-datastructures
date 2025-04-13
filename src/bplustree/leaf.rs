@@ -28,7 +28,7 @@ where
 
         unsafe {
             NonNull::new_unchecked(Box::into_raw(Box::new(Node::Leaf(Leaf {
-                parent: self.parent,
+                parent: None,
                 data: right,
             }))))
         }
@@ -121,8 +121,7 @@ where
         let current_smallest_key = self.smallest_key().clone();
         let mut current_parent = self.parent_mut();
         while let Some(parent) = current_parent {
-            let needs_updating = *parent.smallest_key() < current_smallest_key;
-
+            let needs_updating = *parent.smallest_key() > current_smallest_key;
             if needs_updating {
                 let k = parent.find_key_mut_less_or_equal_to(&current_smallest_key);
                 *k = current_smallest_key.clone();

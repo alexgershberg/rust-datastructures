@@ -188,9 +188,7 @@ where
 
     pub fn remove_largest_entry(&mut self) -> NodeEntry<K, V> {
         match self {
-            Node::Internal(internal) => {
-                todo!()
-            }
+            Node::Internal(internal) => NodeEntry::Internal(internal.remove_largest_entry()),
             Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_largest_entry()),
         }
     }
