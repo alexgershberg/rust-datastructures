@@ -279,13 +279,9 @@ where
         match (self, v) {
             (Node::Internal(internal), NodeValue::Internal(v)) => {
                 if let Some(old) = internal.insert_or_replace(k, v) {
+                    println!("insert or replace yielded a ptr so we're freeing it: {old:?}");
                     let _ = unsafe { Box::from_raw(old.as_ptr()) };
                 }
-
-                // let (k, ptr) = internal.find_entry_mut_less_or_equal_to(k);
-                // let old = *ptr;
-                //
-                // *ptr = v;
             }
             (Node::Leaf(leaf), NodeValue::Leaf(v)) => todo!(),
             (Node::Leaf(..), NodeValue::Internal(..)) => {

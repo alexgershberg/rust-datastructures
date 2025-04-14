@@ -73,21 +73,28 @@ where
     }
 
     pub fn lmerge_into(&mut self, other: &mut Internal<K, V>) {
+        if let Some(new_parent) = unsafe { other.smallest_value().as_ref() }.parent_raw() {
+            for (_, ptr) in self.links.iter_mut() {
+                unsafe {
+                    ptr.as_mut().set_parent(Some(new_parent));
+                }
+            }
+        }
+
         self.links.append(&mut other.links); // TODO: Should just use a VecDeque
         swap(&mut self.links, &mut other.links);
     }
 
     pub fn rmerge_into(&mut self, other: &mut Internal<K, V>) {
-        for (k, node_ptr) in &mut self.links {
-            unsafe {
-                let node = node_ptr.as_mut();
-                node.set_parent(other.parent);
+        if let Some(new_parent) = unsafe { other.smallest_value().as_ref() }.parent_raw() {
+            for (_, ptr) in self.links.iter_mut() {
+                unsafe {
+                    ptr.as_mut().set_parent(Some(new_parent));
+                }
             }
         }
 
         other.links.append(&mut self.links);
-
-        // self.parent = None // TODO: Maybe not?
     }
 
     pub fn is_root(&self) -> bool {

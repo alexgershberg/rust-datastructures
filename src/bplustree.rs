@@ -13,7 +13,11 @@ pub mod leaf;
 pub mod node;
 
 #[derive(Debug)]
-pub struct BPlusTree<K, V> {
+pub struct BPlusTree<K, V>
+where
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
+{
     order: usize,
     root: Option<NonNull<Node<K, V>>>,
     size: usize,
@@ -291,10 +295,6 @@ where
     }
 
     unsafe fn transfer_or_merge(&mut self, mut node_ptr: NonNull<Node<K, V>>) {
-        println!("transfer_or_merge");
-        print_bplustree(self, DebugOptions::default().leaf_address());
-        println!("transfer_or_merge");
-
         let (left_neighbour, right_neighbour) = unsafe { self.get_node_neighbours(node_ptr) };
 
         if let Some(neighbour_ptr) = left_neighbour {
@@ -320,7 +320,6 @@ where
         }
 
         if let Some(neighbour_ptr) = right_neighbour {
-            println!("Merge left into right");
             unsafe { self.merge(node_ptr, neighbour_ptr) };
             return;
         }
@@ -331,7 +330,7 @@ where
             "No neighbours to left, no neighbours to the right, this must be the root"
         );
 
-        let old = self.root.take().expect("There must have been a root node");
+        let mut old_ptr = self.root.take().expect("There must have been a root node");
 
         self.root = match node {
             Node::Internal(internal) => {
@@ -343,8 +342,8 @@ where
         };
 
         println!("freeing old root:");
-        print_node_ptr(old);
-        // let _ = unsafe { Box::from_raw(old.as_ptr()) };
+        // print_node_ptr(old_ptr);
+        let _ = unsafe { Box::from_raw(old_ptr.as_ptr()) };
     }
 
     unsafe fn get_node_neighbours(
@@ -416,7 +415,6 @@ where
         let r_size = right.size();
 
         if l_size < r_size {
-            println!("l_size < r_size");
             let l_smallest = left.smallest_key().clone();
             let r_smallest = right.smallest_key().clone();
             left.lmerge_into(right);
@@ -441,23 +439,22 @@ where
                 }
 
                 if let Some(ptr) = ptr {
-                    println!("freeing ptr we got from removed_value_from_node 1");
-                    print_node_ptr(ptr);
+                    println!("freeing ptr we got from removed_value_from_node 1: {ptr:?}");
+                    // print_node_ptr(ptr);
                     let _ = Box::from_raw(ptr.as_ptr());
                 }
             }
-
-            println!("l_size < r_size end")
         } else {
             let r_smallest = right.smallest_key().clone();
             right.rmerge_into(left);
+
             if let Some(right_parent_ptr) = right.parent_raw() {
                 unsafe {
                     if let Some(NodeValue::Internal(ptr)) =
                         self.remove_value_from_node(right_parent_ptr, &r_smallest)
                     {
-                        println!("freeing ptr we got from removed_value_from_node 2");
-                        print_node_ptr(ptr);
+                        println!("freeing ptr we got from removed_value_from_node 2: {ptr:?}");
+                        // print_node_ptr(ptr);
                         let _ = Box::from_raw(ptr.as_ptr());
                     }
                 }
@@ -505,7 +502,11 @@ where
     }
 }
 
-impl<K, V> Drop for BPlusTree<K, V> {
+impl<K, V> Drop for BPlusTree<K, V>
+where
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
+{
     fn drop(&mut self) {
         let Some(current) = self.root else { return };
 
@@ -515,11 +516,14 @@ impl<K, V> Drop for BPlusTree<K, V> {
                 if let Node::Internal(internal) = current.as_mut() {
                     let mut links = vec![];
                     swap(&mut internal.links, &mut links);
+                    println!("links: {links:?}");
                     for (_, ptr) in links {
                         queue.push_back(ptr);
                     }
                 }
 
+                println!("BPlusTree Drop impl: {current:?}");
+                // print_node_ptr(current);
                 let _ = Box::from_raw(current.as_ptr());
             }
         }
@@ -530,14 +534,23 @@ impl<K, V> Drop for BPlusTree<K, V> {
 mod tests {
     use crate::bplustree::{BPlusTree, Leaf, Node};
     use std::collections::VecDeque;
+    use std::fmt::Debug;
     use std::ptr::NonNull;
 
-    struct LevelIterator<'a, K, V> {
+    struct LevelIterator<'a, K, V>
+    where
+        K: Ord + PartialOrd + Clone + Debug,
+        V: Ord + PartialOrd + Clone + Debug,
+    {
         btree: &'a BPlusTree<K, V>,
         queue: VecDeque<NonNull<Node<K, V>>>,
     }
 
-    impl<'a, K, V> LevelIterator<'a, K, V> {
+    impl<'a, K, V> LevelIterator<'a, K, V>
+    where
+        K: Ord + PartialOrd + Clone + Debug,
+        V: Ord + PartialOrd + Clone + Debug,
+    {
         fn new(btree: &'a BPlusTree<K, V>) -> LevelIterator<'a, K, V> {
             let mut queue = VecDeque::new();
             if let Some(root) = btree.root {
@@ -1716,42 +1729,81 @@ mod tests {
                 print_bplustree(&btree, options);
                 println!();
 
-                // btree.remove(&40);
-                //
-                // println!();
-                // print_bplustree(&btree, options);
-                // println!();
+                btree.remove(&40);
 
-                // btree.remove(&45);
-                //
-                // println!();
-                // print_bplustree(&btree, options);
-                // println!();
-                //
-                // btree.remove(&50);
-                //
-                // println!();
-                // print_bplustree(&btree, DebugOptions::default());
-                // println!();
+                println!();
+                print_bplustree(&btree, options);
+                println!();
 
-                assert!(false, "this needs a proper assert");
+                btree.remove(&45);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&50);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                /////////////////////
+
+                btree.remove(&0);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&5);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&10);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&15);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&16);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&17);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                // assert!(false, "this needs a proper assert");
             }
 
             #[test]
             fn remove_and_collapse_3() {
+                let options = DebugOptions::default().internal_address().leaf_address();
                 let mut btree = BPlusTree::new(4);
                 for i in 0..=10 {
                     btree.insert(5 * i, i);
                 }
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&0);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 /////////////////////
@@ -1759,13 +1811,13 @@ mod tests {
                 btree.remove(&15);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&10);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
             }
 
