@@ -50,10 +50,6 @@ where
         &self.smallest_entry().0
     }
 
-    pub fn smallest_value(&self) -> V {
-        self.smallest_entry().1.clone() // TODO: Can we avoid this clone?
-    }
-
     pub fn insert_smallest_entry(&mut self, e: (K, V)) {
         self.data.insert(0, e);
     }

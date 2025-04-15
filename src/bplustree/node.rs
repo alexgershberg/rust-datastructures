@@ -81,30 +81,10 @@ where
         }
     }
 
-    pub(crate) fn smallest_value(&self) -> NodeValue<K, V> {
-        match self {
-            Node::Internal(internal) => NodeValue::Internal(internal.smallest_value()),
-            Node::Leaf(leaf) => NodeValue::Leaf(leaf.smallest_value()),
-        }
-    }
-
     pub(crate) fn largest_key(&self) -> Option<&K> {
         match self {
             Node::Internal(internal) => internal.links.last().map(|(k, _)| k),
             Node::Leaf(leaf) => leaf.data.last().map(|(k, _)| k),
-        }
-    }
-
-    fn set_smallest(&mut self, k: K) {
-        match self {
-            Node::Internal(internal) => {
-                internal.set_smallest(k);
-            }
-            Node::Leaf(leaf) => {
-                if let Some(first) = leaf.data.get_mut(0) {
-                    first.0 = k;
-                }
-            }
         }
     }
 
@@ -212,54 +192,6 @@ where
         }
     }
 
-    pub fn update_key_from_smaller_to_bigger(&mut self, k: K) {
-        match self {
-            Node::Internal(internal) => {
-                todo!()
-                // let entry = internal.find_mut(&k);
-                // (*entry).0 = k;
-            }
-            Node::Leaf(leaf) => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn update_key_from_bigger_to_smaller(&mut self, k: K) {
-        match self {
-            Node::Internal(internal) => {
-                if let Some((key, ptr)) = internal.right_entry_mut(&k) {
-                    *key = k;
-                    return;
-                }
-
-                let (key, ptr) = internal.left_entry_mut(&k).unwrap();
-                *key = k;
-            }
-            Node::Leaf(leaf) => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn left(&self, k: &K) -> Option<&K> {
-        match self {
-            Node::Internal(internal) => internal.left(k),
-            Node::Leaf(leaf) => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn right(&self, k: &K) -> Option<&K> {
-        match self {
-            Node::Internal(internal) => internal.right(k),
-            Node::Leaf(leaf) => {
-                todo!()
-            }
-        }
-    }
-
     pub(crate) fn remove_key(&mut self, k: &K) -> Option<NodeValue<K, V>> {
         match self {
             Node::Internal(internal) => {
@@ -269,24 +201,6 @@ where
             Node::Leaf(leaf) => {
                 let v = leaf.remove(k)?;
                 Some(NodeValue::Leaf(v))
-            }
-        }
-    }
-
-    unsafe fn insert(&mut self, k: K, v: NodeValue<K, V>) {
-        match (self, v) {
-            (Node::Internal(internal), NodeValue::Internal(v)) => {
-                if let Some(old) = internal.insert_or_replace(k, v) {
-                    println!("insert or replace yielded a ptr so we're freeing it: {old:?}");
-                    let _ = unsafe { Box::from_raw(old.as_ptr()) };
-                }
-            }
-            (Node::Leaf(leaf), NodeValue::Leaf(v)) => todo!(),
-            (Node::Leaf(..), NodeValue::Internal(..)) => {
-                panic!("Trying to insert Internal node value into a Leaf!")
-            }
-            (Node::Internal(..), NodeValue::Leaf(..)) => {
-                panic!("Trying to insert Leaf value into an Internal node!")
             }
         }
     }

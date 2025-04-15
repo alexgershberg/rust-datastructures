@@ -38,22 +38,12 @@ where
         self.links.first().unwrap()
     }
 
-    fn smallest_entry_mut(&mut self) -> &mut (K, NonNull<Node<K, V>>) {
-        self.links.first_mut().unwrap()
-    }
-
     pub fn smallest_key(&self) -> &K {
         &self.smallest_entry().0
     }
 
     pub fn smallest_value(&self) -> NonNull<Node<K, V>> {
         self.smallest_entry().1
-    }
-
-    pub fn set_smallest(&mut self, k: K) {
-        if let Some(first) = self.links.get_mut(0) {
-            first.0 = k;
-        }
     }
 
     pub fn insert_smallest_entry(&mut self, e: (K, NonNull<Node<K, V>>)) {
