@@ -7,9 +7,9 @@ use std::mem::swap;
 use std::ptr::NonNull;
 
 pub mod debug;
-pub mod internal;
-pub mod leaf;
-pub mod node;
+pub(crate) mod internal;
+pub(crate) mod leaf;
+pub(crate) mod node;
 
 #[derive(Debug)]
 pub struct BPlusTree<K, V>

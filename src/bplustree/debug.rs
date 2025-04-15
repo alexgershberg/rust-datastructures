@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::ptr::NonNull;
 
-pub fn create_leaf<K, V>(k: K, v: V) -> NonNull<Node<K, V>> {
+pub(crate) fn create_leaf<K, V>(k: K, v: V) -> NonNull<Node<K, V>> {
     let leaf = Node::Leaf(Leaf {
         parent: None,
         data: vec![(k, v)],
@@ -13,7 +13,7 @@ pub fn create_leaf<K, V>(k: K, v: V) -> NonNull<Node<K, V>> {
     unsafe { NonNull::new_unchecked(Box::into_raw(Box::new(leaf))) }
 }
 
-pub unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
+pub(crate) unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
     unsafe {
         let _ = Box::from_raw(ptr.as_ptr());
     }
@@ -37,12 +37,12 @@ where
 }
 
 #[derive(Debug, Copy, Clone, Default)]
-pub struct PtrDebugOptions {
+pub(crate) struct PtrDebugOptions {
     show_values: bool,
 }
 
 impl PtrDebugOptions {
-    pub fn values(self) -> Self {
+    pub(crate) fn values(self) -> Self {
         Self { show_values: true }
     }
 }
@@ -118,7 +118,7 @@ impl DebugOptions {
     }
 }
 
-pub unsafe fn print_node<K, V>(root: NonNull<Node<K, V>>, options: DebugOptions)
+pub(crate) unsafe fn print_node<K, V>(root: NonNull<Node<K, V>>, options: DebugOptions)
 where
     K: Ord + PartialOrd + Clone + Debug,
     V: Ord + PartialOrd + Clone + Debug,
@@ -205,7 +205,7 @@ where
                                               (123456, 35)
 */
 
-pub unsafe fn format_node_ptr<K, V>(
+pub(crate) unsafe fn format_node_ptr<K, V>(
     ptr: NonNull<Node<K, V>>,
     ptr_debug_options: PtrDebugOptions,
 ) -> String
@@ -231,7 +231,7 @@ where
     }
 }
 
-pub unsafe fn print_node_ptr<K, V>(ptr: NonNull<Node<K, V>>)
+pub(crate) unsafe fn print_node_ptr<K, V>(ptr: NonNull<Node<K, V>>)
 where
     K: Ord + PartialOrd + Clone + Debug,
     V: Ord + PartialOrd + Clone + Debug,
