@@ -1,7 +1,7 @@
 use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
 use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
-use crate::bplustree::node::{Node, NodeValue};
+use crate::bplustree::node::{Node, NodeEntry, NodeValue};
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::swap;
@@ -54,6 +54,7 @@ where
     }
 
     pub fn new(order: usize) -> Self {
+        assert!(order > 2, "BPlusTree order must be at least 2");
         Self {
             order,
             root: None,
@@ -188,38 +189,6 @@ where
         Some(value)
     }
 
-    unsafe fn remove_value_from_internal_node(
-        &mut self,
-        mut node_ptr: NonNull<Node<K, V>>,
-        k: &K,
-        ptr: &mut NonNull<Node<K, V>>,
-    ) -> bool {
-        let node = unsafe { node_ptr.as_mut() };
-
-        let removing_smallest = node.smallest_key() == k;
-
-        let Some(mut value) = node.as_internal_mut().remove(k) else {
-            return false;
-        };
-
-        *ptr = value;
-        unsafe {
-            let child = value.as_mut();
-            child.set_parent(Some(node_ptr));
-        }
-
-        if removing_smallest {
-            unsafe { self.update_parent_smallest_key(node_ptr) };
-        }
-
-        let size = unsafe { node_ptr.as_ref().size() }; // Miri Stacked Borrows rule violation without this line
-        if size < self.min_node_size() {
-            unsafe { self.transfer_or_merge(node_ptr) };
-        }
-
-        true
-    }
-
     pub fn contains(&mut self, k: &K) -> bool {
         self.find(k).is_some()
     }
@@ -230,12 +199,12 @@ where
         Some(v)
     }
 
-    fn max_node_size(&self) -> usize {
+    pub fn max_node_size(&self) -> usize {
         self.order // This BPlusTree is slightly different, each ENTRY in internal node points to a child, not the LINKS between entries
     }
 
-    fn min_node_size(&self) -> usize {
-        self.order / 2
+    pub fn min_node_size(&self) -> usize {
+        self.order.div_ceil(2)
     }
 
     unsafe fn insert_into_parent_node(
@@ -341,7 +310,7 @@ where
             Node::Leaf(leaf) => None,
         };
 
-        println!("freeing old root:");
+        // println!("freeing old root:");
         // print_node_ptr(old_ptr);
         let _ = unsafe { Box::from_raw(old_ptr.as_ptr()) };
     }
@@ -387,12 +356,22 @@ where
             let entry = right.remove_smallest_entry();
             let new = right.smallest_key();
 
+            if let NodeEntry::Internal((_, mut ptr)) = entry {
+                let child = unsafe { ptr.as_mut() };
+                unsafe { child.set_parent(Some(left_ptr)) }
+            }
+
             left.insert_largest_entry(entry);
             unsafe {
                 self.update_parent_key(right_ptr, old, &new);
             }
         } else {
             let entry = left.remove_largest_entry();
+
+            if let NodeEntry::Internal((_, mut ptr)) = entry {
+                let child = unsafe { ptr.as_mut() };
+                unsafe { child.set_parent(Some(right_ptr)) }
+            }
 
             let old = right.smallest_key().clone(); // TODO: Check if we can do this without needless allocations
             right.insert_smallest_entry(entry);
@@ -439,7 +418,7 @@ where
                 }
 
                 if let Some(ptr) = ptr {
-                    println!("freeing ptr we got from removed_value_from_node 1: {ptr:?}");
+                    // println!("freeing ptr we got from removed_value_from_node 1: {ptr:?}");
                     // print_node_ptr(ptr);
                     let _ = Box::from_raw(ptr.as_ptr());
                 }
@@ -453,7 +432,7 @@ where
                     if let Some(NodeValue::Internal(ptr)) =
                         self.remove_value_from_node(right_parent_ptr, &r_smallest)
                     {
-                        println!("freeing ptr we got from removed_value_from_node 2: {ptr:?}");
+                        // println!("freeing ptr we got from removed_value_from_node 2: {ptr:?}");
                         // print_node_ptr(ptr);
                         let _ = Box::from_raw(ptr.as_ptr());
                     }
@@ -516,13 +495,12 @@ where
                 if let Node::Internal(internal) = current.as_mut() {
                     let mut links = vec![];
                     swap(&mut internal.links, &mut links);
-                    println!("links: {links:?}");
                     for (_, ptr) in links {
                         queue.push_back(ptr);
                     }
                 }
 
-                println!("BPlusTree Drop impl: {current:?}");
+                // println!("BPlusTree Drop impl: {current:?}");
                 // print_node_ptr(current);
                 let _ = Box::from_raw(current.as_ptr());
             }
@@ -1806,8 +1784,6 @@ mod tests {
                 print_bplustree(&btree, options);
                 println!();
 
-                /////////////////////
-
                 btree.remove(&15);
 
                 println!();
@@ -1815,6 +1791,64 @@ mod tests {
                 println!();
 
                 btree.remove(&10);
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+            }
+
+            #[test]
+            fn remove_and_transfer_updates_parent_ptr_of_internal_node_children_2() {
+                let options = DebugOptions::default().internal_address().leaf_address();
+                let mut btree = BPlusTree::new(4);
+                for i in 0..=10 {
+                    btree.insert(5 * i, i);
+                }
+                btree.insert(6, 11);
+                btree.insert(7, 12);
+                btree.insert(8, 13);
+                btree.remove(&25);
+                btree.remove(&30);
+                btree.remove(&45);
+                /*
+                 [0x6000006f02a0 | parent: None]    0  ->  [0x6000006f00f0 | parent: Some(0x6000006f02a0)]    0  ->  [0x6000006f0090 | parent: Some(0x6000006f00f0)]    0:    0
+                                                                                                                     [0x6000006f0090 | parent: Some(0x6000006f00f0)]    5:    1
+
+                                                           [0x6000006f00f0 | parent: Some(0x6000006f02a0)]    6  ->  [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    6:   11
+                                                                                                                     [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    7:   12
+                                                                                                                     [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    8:   13
+
+                                                           [0x6000006f00f0 | parent: Some(0x6000006f02a0)]   10  ->  [0x6000006f00c0 | parent: Some(0x6000006f00f0)]   10:    2
+                                                                                                                     [0x6000006f00c0 | parent: Some(0x6000006f00f0)]   15:    3
+                                                                                                                                                    ^^^^^^^^^^^^^^
+                 [0x6000006f02a0 | parent: None]   20  ->  [0x6000006f0270 | parent: Some(0x6000006f02a0)]   20  ->  [0x6000006f01b0 | parent: Some(0x6000006f0270)]   20:    4
+                                                                                                                     [0x6000006f01b0 | parent: Some(0x6000006f0270)]   35:    7
+
+                                                           [0x6000006f0270 | parent: Some(0x6000006f02a0)]   40  ->  [0x6000006f0210 | parent: Some(0x6000006f0270)]   40:    8
+                                                                                                                     [0x6000006f0210 | parent: Some(0x6000006f0270)]   50:   10
+                */
+
+                println!();
+                print_bplustree(&btree, options);
+                println!();
+
+                btree.remove(&35);
+
+                /*
+                 [0x6000006f02a0 | parent: None]    0  ->  [0x6000006f00f0 | parent: Some(0x6000006f02a0)]    0  ->  [0x6000006f0090 | parent: Some(0x6000006f00f0)]    0:    0
+                                                                                                                     [0x6000006f0090 | parent: Some(0x6000006f00f0)]    5:    1
+
+                                                           [0x6000006f00f0 | parent: Some(0x6000006f02a0)]    6  ->  [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    6:   11
+                                                                                                                     [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    7:   12
+                                                                                                                     [0x6000006f02d0 | parent: Some(0x6000006f00f0)]    8:   13
+
+                 [0x6000006f02a0 | parent: None]   10  ->  [0x6000006f0270 | parent: Some(0x6000006f02a0)]   10  ->  [0x6000006f00c0 | parent: Some(0x6000006f0270)]   10:    2
+                                                                                                                     [0x6000006f00c0 | parent: Some(0x6000006f0270)]   15:    3
+                                                                                                                                                    ^^^^^^^^^^^^^^
+                                                           [0x6000006f0270 | parent: Some(0x6000006f02a0)]   20  ->  [0x6000006f0210 | parent: Some(0x6000006f0270)]   20:    4
+                                                                                                                     [0x6000006f0210 | parent: Some(0x6000006f0270)]   40:    8
+                                                                                                                     [0x6000006f0210 | parent: Some(0x6000006f0270)]   50:   10
+                */
 
                 println!();
                 print_bplustree(&btree, options);
@@ -1938,7 +1972,7 @@ mod tests {
 
         mod fuzz {
             use crate::bplustree::BPlusTree;
-            use crate::bplustree::debug::{DebugOptions, print_bplustree};
+            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
             use rand::{random_bool, random_range};
 
             #[test]
@@ -1987,11 +2021,13 @@ mod tests {
             #[ignore = "Non-deterministic"]
             fn insert_and_remove_at_random() {
                 let mut btree = BPlusTree::new(4);
-                let n = 500;
+                let n = 50000;
+                let m = 150;
+                let p = 0.5;
                 for i in 0..n {
-                    let k = random_range(0..=25);
+                    let k = random_range(-m..=m);
 
-                    let insert = random_bool(0.4);
+                    let insert = random_bool(p);
                     if insert {
                         btree.insert(k, i);
                     } else {
@@ -2003,456 +2039,6 @@ mod tests {
                 print_bplustree(&btree, DebugOptions::default());
                 println!();
                 println!("size: {}", btree.size());
-            }
-
-            #[test]
-            fn t() {
-                let mut btree = BPlusTree::new(4);
-                btree.insert(13, 0);
-                btree.remove(&0);
-                btree.insert(3, 2);
-                btree.remove(&13);
-                btree.remove(&17);
-                btree.insert(11, 5);
-                btree.remove(&15);
-                btree.insert(19, 7);
-                btree.insert(25, 8);
-                btree.remove(&14);
-                btree.remove(&11);
-                btree.insert(16, 11);
-                btree.remove(&16);
-                btree.insert(20, 13);
-                btree.remove(&13);
-                btree.remove(&17);
-                btree.remove(&24);
-                btree.remove(&14);
-                btree.insert(14, 18);
-                btree.insert(12, 19);
-                btree.insert(14, 20);
-                btree.remove(&22);
-                btree.insert(22, 22);
-                btree.remove(&5);
-                btree.insert(24, 24);
-                btree.remove(&19);
-                btree.remove(&3);
-                btree.remove(&22);
-                btree.insert(15, 28);
-                btree.remove(&5);
-                btree.remove(&12);
-                btree.remove(&1);
-                btree.remove(&17);
-                btree.remove(&3);
-                btree.insert(12, 34);
-                btree.remove(&7);
-                btree.insert(18, 36);
-                btree.remove(&11);
-                btree.insert(20, 38);
-                btree.insert(23, 39);
-                btree.remove(&18);
-                btree.insert(17, 41);
-                btree.remove(&20);
-                btree.remove(&15);
-                btree.insert(14, 44);
-                btree.remove(&11);
-                btree.remove(&18);
-                btree.insert(1, 47);
-                btree.remove(&25);
-                btree.insert(25, 49);
-                btree.insert(24, 50);
-                btree.remove(&5);
-                btree.remove(&19);
-                btree.remove(&19);
-                btree.remove(&17);
-                btree.insert(15, 55);
-                btree.remove(&7);
-                btree.remove(&1);
-                btree.insert(12, 58);
-                btree.remove(&11);
-                btree.remove(&19);
-                btree.remove(&1);
-                btree.remove(&5);
-                btree.insert(10, 63);
-                btree.insert(20, 64);
-                btree.remove(&6);
-                btree.remove(&18);
-                btree.insert(17, 67);
-                btree.remove(&8);
-                btree.remove(&1);
-                btree.remove(&13);
-                btree.remove(&4);
-                btree.insert(4, 72);
-                btree.remove(&12);
-                btree.remove(&7);
-                btree.remove(&11);
-                btree.remove(&7);
-                btree.insert(21, 77);
-                btree.remove(&8);
-                btree.insert(10, 79);
-                btree.remove(&10);
-                btree.insert(10, 81);
-                btree.remove(&17);
-                btree.remove(&24);
-                btree.remove(&1);
-                btree.remove(&10);
-                btree.insert(7, 86);
-                btree.insert(15, 87);
-                btree.remove(&22);
-                btree.remove(&13);
-                btree.insert(4, 90);
-                btree.remove(&19);
-                btree.remove(&16);
-                btree.insert(22, 93);
-                btree.insert(8, 94);
-                btree.insert(0, 95);
-                btree.insert(16, 96);
-                btree.remove(&19);
-                btree.remove(&25);
-                btree.remove(&3);
-                btree.remove(&18);
-                btree.remove(&20);
-                btree.remove(&1);
-                btree.remove(&23);
-                btree.remove(&25);
-                btree.remove(&6);
-                btree.remove(&19);
-                btree.remove(&13);
-                btree.insert(21, 108);
-                btree.remove(&13);
-                btree.insert(6, 110);
-                btree.remove(&25);
-                btree.insert(14, 112);
-                btree.insert(13, 113);
-                btree.insert(19, 114);
-                btree.insert(6, 115);
-                btree.remove(&3);
-                btree.remove(&5);
-                btree.remove(&13);
-                btree.remove(&19);
-                btree.remove(&16);
-                btree.remove(&18);
-                btree.remove(&18);
-                btree.insert(9, 123);
-                btree.remove(&4);
-                btree.insert(23, 125);
-                btree.remove(&7);
-                btree.remove(&14);
-                btree.remove(&22);
-                btree.remove(&14);
-                btree.insert(24, 130);
-                btree.remove(&4);
-                btree.remove(&3);
-                btree.insert(24, 133);
-                btree.insert(3, 134);
-                btree.remove(&18);
-                btree.remove(&19);
-                btree.insert(8, 137);
-                btree.insert(17, 138);
-                btree.remove(&3);
-                btree.remove(&13);
-                btree.remove(&18);
-                btree.insert(0, 142);
-                btree.insert(2, 143);
-                btree.remove(&4);
-                btree.insert(19, 145);
-                btree.insert(22, 146);
-                btree.insert(20, 147);
-                btree.insert(5, 148);
-                btree.remove(&15);
-                btree.remove(&16);
-                btree.remove(&16);
-                btree.insert(18, 152);
-                btree.remove(&21);
-                btree.insert(23, 154);
-                btree.insert(0, 155);
-                btree.insert(15, 156);
-                btree.remove(&23);
-                btree.insert(8, 158);
-                btree.remove(&15);
-                btree.remove(&8);
-                btree.remove(&23);
-                btree.remove(&13);
-                btree.remove(&19);
-                btree.remove(&13);
-                btree.insert(4, 165);
-                btree.insert(9, 166);
-                btree.insert(13, 167);
-                btree.remove(&9);
-                btree.remove(&13);
-                btree.remove(&3);
-                btree.insert(15, 171);
-                btree.remove(&2);
-                btree.insert(6, 173);
-                btree.insert(25, 174);
-                btree.remove(&22);
-                btree.remove(&1);
-                btree.remove(&12);
-                btree.remove(&2);
-                btree.remove(&22);
-                btree.remove(&14);
-                btree.insert(25, 181);
-                btree.remove(&24);
-                btree.insert(5, 183);
-                btree.insert(21, 184);
-                btree.remove(&25);
-                btree.insert(15, 186);
-                btree.remove(&15);
-                btree.insert(5, 188);
-                btree.remove(&6);
-                btree.insert(18, 190);
-                btree.remove(&17);
-                btree.insert(7, 192);
-                btree.remove(&3);
-                btree.insert(15, 194);
-                btree.remove(&2);
-                btree.remove(&12);
-                btree.remove(&9);
-                btree.insert(15, 198);
-                btree.insert(25, 199);
-                btree.remove(&22);
-                btree.insert(11, 201);
-                btree.insert(1, 202);
-                btree.insert(6, 203);
-                btree.remove(&4);
-                btree.remove(&6);
-                btree.remove(&8);
-                btree.remove(&6);
-                btree.insert(6, 208);
-                btree.insert(7, 209);
-                btree.insert(24, 210);
-                btree.remove(&20);
-                btree.remove(&5);
-                btree.remove(&4);
-                btree.remove(&4);
-                btree.remove(&18);
-                btree.remove(&1);
-                btree.insert(9, 217);
-                btree.remove(&14);
-                btree.insert(16, 219);
-                btree.remove(&18);
-                btree.insert(18, 221);
-                btree.remove(&16);
-                btree.remove(&14);
-                btree.remove(&22);
-                btree.remove(&8);
-                btree.remove(&17);
-                btree.remove(&7);
-                btree.insert(0, 228);
-                btree.remove(&8);
-                btree.remove(&24);
-                btree.remove(&7);
-                btree.insert(22, 232);
-                btree.remove(&10);
-                btree.remove(&12);
-                btree.insert(19, 235);
-                btree.remove(&17);
-                btree.remove(&16);
-                btree.remove(&1);
-                btree.remove(&20);
-                btree.insert(3, 240);
-                btree.remove(&14);
-                btree.insert(2, 242);
-                btree.remove(&12);
-                btree.insert(15, 244);
-                btree.remove(&3);
-                btree.remove(&11);
-                btree.remove(&19);
-                btree.insert(1, 248);
-                btree.remove(&13);
-                btree.remove(&20);
-                btree.remove(&13);
-                btree.remove(&2);
-                btree.remove(&16);
-                btree.remove(&13);
-                btree.insert(4, 255);
-                btree.remove(&12);
-                btree.insert(21, 257);
-                btree.insert(19, 258);
-                btree.insert(24, 259);
-                btree.insert(11, 260);
-                btree.remove(&19);
-                btree.insert(2, 262);
-                btree.remove(&9);
-                btree.remove(&7);
-                btree.remove(&3);
-                btree.remove(&17);
-                btree.insert(17, 267);
-                btree.remove(&20);
-                btree.remove(&8);
-                btree.remove(&2);
-                btree.remove(&14);
-                btree.insert(20, 272);
-                btree.remove(&13);
-                btree.insert(9, 274);
-                btree.insert(11, 275);
-                btree.insert(24, 276);
-                btree.remove(&9);
-                btree.insert(5, 278);
-                btree.remove(&12);
-                btree.remove(&10);
-                btree.remove(&9);
-                btree.remove(&10);
-                btree.remove(&0);
-                btree.insert(20, 284);
-                btree.remove(&12);
-                btree.insert(7, 286);
-                btree.insert(24, 287);
-                btree.remove(&22);
-                btree.insert(13, 289);
-                btree.remove(&19);
-                btree.remove(&13);
-                btree.insert(4, 292);
-                btree.remove(&19);
-                btree.insert(2, 294);
-                btree.remove(&22);
-                btree.remove(&5);
-                btree.remove(&21);
-                btree.remove(&14);
-                btree.remove(&0);
-                btree.remove(&19);
-                btree.remove(&7);
-                btree.insert(4, 302);
-                btree.insert(9, 303);
-                btree.remove(&16);
-                btree.remove(&5);
-                btree.remove(&20);
-                btree.insert(22, 307);
-                btree.remove(&0);
-                btree.remove(&7);
-                btree.remove(&4);
-                btree.insert(19, 311);
-                btree.insert(20, 312);
-                btree.remove(&5);
-                btree.remove(&20);
-                btree.remove(&13);
-                btree.insert(16, 316);
-                btree.remove(&5);
-                btree.remove(&21);
-                btree.insert(9, 319);
-                btree.remove(&23);
-                btree.remove(&13);
-                btree.insert(7, 322);
-                btree.remove(&6);
-                btree.insert(21, 324);
-                btree.remove(&22);
-                btree.remove(&10);
-                btree.remove(&18);
-                btree.remove(&13);
-                btree.insert(23, 329);
-                btree.remove(&17);
-                btree.remove(&11);
-                btree.remove(&8);
-                btree.insert(13, 333);
-                btree.remove(&24);
-                btree.remove(&15);
-                btree.remove(&7);
-                btree.insert(13, 337);
-                btree.insert(19, 338);
-                btree.remove(&18);
-                btree.remove(&3);
-                btree.insert(4, 341);
-                btree.remove(&24);
-                btree.remove(&19);
-                btree.remove(&2);
-                btree.remove(&1);
-                btree.insert(6, 346);
-                btree.insert(2, 347);
-                btree.insert(14, 348);
-                btree.remove(&8);
-                btree.insert(15, 350);
-                btree.insert(2, 351);
-                btree.remove(&12);
-                btree.remove(&20);
-                btree.remove(&4);
-                btree.remove(&19);
-                btree.insert(25, 356);
-                btree.remove(&0);
-                btree.remove(&6);
-                btree.remove(&17);
-                btree.remove(&7);
-                btree.remove(&16);
-                btree.insert(21, 362);
-                btree.insert(3, 363);
-                btree.remove(&10);
-                btree.remove(&17);
-                btree.remove(&9);
-                btree.insert(11, 367);
-                btree.insert(15, 368);
-                btree.insert(16, 369);
-                btree.remove(&19);
-                btree.insert(24, 371);
-                btree.insert(5, 372);
-                btree.remove(&7);
-                btree.remove(&5);
-                btree.insert(9, 375);
-                btree.insert(18, 376);
-                btree.remove(&24);
-                btree.remove(&14);
-                btree.insert(9, 379);
-                btree.remove(&3);
-                btree.remove(&12);
-                btree.remove(&22);
-                btree.remove(&6);
-                btree.remove(&8);
-                btree.remove(&1);
-                btree.remove(&11);
-                btree.insert(25, 387);
-                btree.remove(&24);
-                btree.remove(&3);
-                btree.remove(&15);
-                btree.insert(9, 391);
-                btree.remove(&23);
-                btree.remove(&15);
-                btree.insert(13, 394);
-                btree.remove(&5);
-                btree.remove(&23);
-                btree.insert(6, 397);
-                btree.remove(&6);
-                btree.remove(&4);
-                btree.insert(22, 400);
-                btree.remove(&11);
-                btree.remove(&8);
-                btree.remove(&8);
-                btree.remove(&18);
-                btree.remove(&13);
-                btree.insert(14, 406);
-                btree.remove(&8);
-                btree.insert(24, 408);
-                btree.insert(6, 409);
-                btree.remove(&16);
-                btree.insert(11, 411);
-                btree.insert(14, 412);
-                btree.insert(8, 413);
-                btree.remove(&11);
-                btree.remove(&19);
-                btree.remove(&13);
-                btree.remove(&24);
-                btree.remove(&11);
-                btree.remove(&9);
-                btree.insert(24, 420);
-                btree.remove(&25);
-                btree.remove(&1);
-                btree.remove(&7);
-                btree.insert(12, 424);
-                btree.insert(22, 425);
-                btree.remove(&15);
-                btree.insert(3, 427);
-                btree.insert(3, 428);
-                btree.remove(&7);
-                btree.remove(&24);
-                btree.remove(&14);
-                btree.insert(19, 432);
-                btree.insert(12, 433);
-                btree.remove(&10);
-                btree.remove(&16);
-                btree.remove(&4);
-                btree.insert(7, 437);
-                btree.remove(&18);
-
-                println!();
-                print_bplustree(&btree, DebugOptions::default());
-                println!();
-
-                btree.remove(&21);
             }
         }
 
@@ -2541,7 +2127,7 @@ mod tests {
                 ],
             };
 
-            let (_, node) = internal.find_entry(&(12345, 8)).unwrap();
+            let (_, node) = internal.find_entry_less_or_equal_to(&(12345, 8));
             assert_eq!(*node, leaf2);
 
             unsafe {

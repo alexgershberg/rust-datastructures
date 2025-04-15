@@ -81,7 +81,7 @@ where
         }
     }
 
-    fn smallest_value(&self) -> NodeValue<K, V> {
+    pub(crate) fn smallest_value(&self) -> NodeValue<K, V> {
         match self {
             Node::Internal(internal) => NodeValue::Internal(internal.smallest_value()),
             Node::Leaf(leaf) => NodeValue::Leaf(leaf.smallest_value()),
@@ -153,9 +153,7 @@ where
 
     pub fn insert_smallest_entry(&mut self, e: NodeEntry<K, V>) {
         match (self, e) {
-            (Node::Internal(internal), NodeEntry::Internal(e)) => {
-                todo!()
-            }
+            (Node::Internal(internal), NodeEntry::Internal(e)) => internal.insert_smallest_entry(e),
             (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_smallest_entry(e),
             (Node::Leaf(..), NodeEntry::Internal(..)) => {
                 panic!("Trying to insert Internal node entry into a Leaf!")
