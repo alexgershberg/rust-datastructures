@@ -306,13 +306,13 @@ where
             "No neighbours to left, no neighbours to the right, this must be the root"
         );
 
-        let mut old_ptr = self.root.take().expect("There must have been a root node");
+        let old_ptr = self.root.take().expect("There must have been a root node");
 
         self.root = match node {
             Node::Internal(internal) => {
-                let mut new_root = internal.smallest_value();
-                unsafe { new_root.as_mut().set_parent(None) };
-                Some(new_root)
+                let mut child = internal.smallest_value();
+                unsafe { child.as_mut().set_parent(None) };
+                Some(child)
             }
             Node::Leaf(leaf) => None,
         };
@@ -512,8 +512,8 @@ where
                     let mut links = vec![];
                     swap(&mut internal.links, &mut links);
                     for (_, mut ptr) in links {
-                        queue.push_back(ptr);
                         ptr.as_mut().set_parent(None);
+                        queue.push_back(ptr);
                     }
                 }
 
@@ -534,20 +534,11 @@ where
     println!("{msg}");
 
     let node = unsafe { ptr.as_mut() };
-    // node.set_parent(None);
 
     if let Some(parent) = node.parent_raw() {
-        println!("Parent was not None on node: {ptr:?} | parent: {parent:?}");
+        panic!("Parent was not None on node: {ptr:?} | parent: {parent:?}");
     }
     println!("{ptr:?}: {node:?}");
-    if let Node::Internal(node) = node {
-        for (_, ptr) in node.links.iter_mut() {
-            let child = ptr.as_mut();
-            unsafe {
-                child.set_parent(None);
-            }
-        }
-    }
 
     print_node_ptr(ptr);
 
