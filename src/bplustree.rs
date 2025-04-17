@@ -1,9 +1,11 @@
+use crate::bplustree::debug::print_node_ptr;
 use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::{Node, NodeEntry, NodeValue};
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::swap;
+use std::pin::pin;
 use std::ptr::NonNull;
 
 pub mod debug;
@@ -175,7 +177,13 @@ where
 
         let removing_smallest = node.smallest_key() == k;
 
-        let value = node.remove_key(k)?;
+        let value = node.remove(k)?;
+        if let NodeValue::Internal(mut child_ptr) = value {
+            // We must set parent of child node we just removed to None, or risk accessing a dangling pointer
+            let child = child_ptr.as_mut();
+            child.set_parent(None);
+        }
+
         if removing_smallest {
             unsafe { self.update_parent_smallest_key(node_ptr) };
         }
@@ -311,7 +319,8 @@ where
 
         // println!("freeing old root:");
         // print_node_ptr(old_ptr);
-        let _ = unsafe { Box::from_raw(old_ptr.as_ptr()) };
+        // let _ = unsafe { Box::from_raw(old_ptr.as_ptr()) };
+        free_node_ptr(old_ptr, "freeing old root:")
     }
 
     unsafe fn get_node_neighbours(
@@ -419,7 +428,11 @@ where
                 if let Some(ptr) = ptr {
                     // println!("freeing ptr we got from removed_value_from_node 1: {ptr:?}");
                     // print_node_ptr(ptr);
-                    let _ = Box::from_raw(ptr.as_ptr());
+                    // let _ = Box::from_raw(ptr.as_ptr());
+                    free_node_ptr(
+                        ptr,
+                        &format!("freeing ptr we got from removed_value_from_node 1: {ptr:?}"),
+                    );
                 }
             }
         } else {
@@ -433,7 +446,11 @@ where
                     {
                         // println!("freeing ptr we got from removed_value_from_node 2: {ptr:?}");
                         // print_node_ptr(ptr);
-                        let _ = Box::from_raw(ptr.as_ptr());
+                        // let _ = Box::from_raw(ptr.as_ptr());
+                        free_node_ptr(
+                            ptr,
+                            &format!("freeing ptr we got from removed_value_from_node 2: {ptr:?}"),
+                        );
                     }
                 }
             }
@@ -494,17 +511,47 @@ where
                 if let Node::Internal(internal) = current.as_mut() {
                     let mut links = vec![];
                     swap(&mut internal.links, &mut links);
-                    for (_, ptr) in links {
+                    for (_, mut ptr) in links {
                         queue.push_back(ptr);
+                        ptr.as_mut().set_parent(None);
                     }
                 }
 
                 // println!("BPlusTree Drop impl: {current:?}");
                 // print_node_ptr(current);
-                let _ = Box::from_raw(current.as_ptr());
+                // let _ = Box::from_raw(current.as_ptr());
+                free_node_ptr(current, &format!("BPlusTree Drop impl: {current:?}"))
             }
         }
     }
+}
+
+unsafe fn free_node_ptr<K, V>(mut ptr: NonNull<Node<K, V>>, msg: &str)
+where
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
+{
+    println!("{msg}");
+
+    let node = unsafe { ptr.as_mut() };
+    // node.set_parent(None);
+
+    if let Some(parent) = node.parent_raw() {
+        println!("Parent was not None on node: {ptr:?} | parent: {parent:?}");
+    }
+    println!("{ptr:?}: {node:?}");
+    if let Node::Internal(node) = node {
+        for (_, ptr) in node.links.iter_mut() {
+            let child = ptr.as_mut();
+            unsafe {
+                child.set_parent(None);
+            }
+        }
+    }
+
+    print_node_ptr(ptr);
+
+    let _ = Box::from_raw(ptr.as_ptr());
 }
 
 #[cfg(test)]
@@ -1610,37 +1657,38 @@ mod tests {
 
             #[test]
             fn remove_and_collapse_1() {
+                let options = DebugOptions::default().leaf_address().internal_address();
                 let mut btree = BPlusTree::new(4);
                 for i in 0..=10 {
                     btree.insert(5 * i, i);
                 }
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&20);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&25);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&30);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 btree.remove(&35);
 
                 println!();
-                print_bplustree(&btree, DebugOptions::default());
+                print_bplustree(&btree, options);
                 println!();
 
                 // btree.remove(&40);

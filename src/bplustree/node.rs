@@ -192,7 +192,7 @@ where
         }
     }
 
-    pub(crate) fn remove_key(&mut self, k: &K) -> Option<NodeValue<K, V>> {
+    pub(crate) fn remove(&mut self, k: &K) -> Option<NodeValue<K, V>> {
         match self {
             Node::Internal(internal) => {
                 let v = internal.remove(k)?;
