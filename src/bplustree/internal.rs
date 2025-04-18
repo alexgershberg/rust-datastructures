@@ -4,7 +4,7 @@ use std::mem::swap;
 use std::ptr::NonNull;
 
 #[derive(Debug)]
-pub struct Internal<K, V> {
+pub(crate) struct Internal<K, V> {
     pub(crate) parent: Option<NonNull<Node<K, V>>>,
     pub(crate) links: Vec<(K, NonNull<Node<K, V>>)>,
 }

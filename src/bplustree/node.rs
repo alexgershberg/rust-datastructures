@@ -4,20 +4,20 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 
 #[derive(Debug)]
-pub enum NodeEntry<K, V> {
+pub(crate) enum NodeEntry<K, V> {
     Internal((K, NonNull<Node<K, V>>)),
     Leaf((K, V)),
 }
 
 impl<K, V> NodeEntry<K, V> {
-    pub fn new(k: K, v: NodeValue<K, V>) -> Self {
+    pub(crate) fn new(k: K, v: NodeValue<K, V>) -> Self {
         match v {
             NodeValue::Internal(v) => Self::Internal((k, v)),
             NodeValue::Leaf(v) => Self::Leaf((k, v)),
         }
     }
 
-    pub fn key(&self) -> &K {
+    pub(crate) fn key(&self) -> &K {
         match self {
             NodeEntry::Internal((k, _)) => k,
             NodeEntry::Leaf((k, _)) => k,
@@ -26,13 +26,13 @@ impl<K, V> NodeEntry<K, V> {
 }
 
 #[derive(Debug)]
-pub enum NodeValue<K, V> {
+pub(crate) enum NodeValue<K, V> {
     Leaf(V),
     Internal(NonNull<Node<K, V>>),
 }
 
 #[derive(Debug)]
-pub enum Node<K, V> {
+pub(crate) enum Node<K, V> {
     Internal(Internal<K, V>),
     Leaf(Leaf<K, V>),
 }
@@ -41,39 +41,39 @@ impl<K, V> Node<K, V>
 where
     K: Ord + PartialOrd + Clone,
 {
-    pub fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
+    pub(crate) fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
         match self {
             Node::Internal(internal) => internal.parent_raw(),
             Node::Leaf(leaf) => leaf.parent_raw(),
         }
     }
 
-    pub fn parent(&self) -> Option<&Internal<K, V>> {
+    pub(crate) fn parent(&self) -> Option<&Internal<K, V>> {
         unsafe { Some(self.parent_raw()?.as_ref().as_internal()) }
     }
 
-    pub fn parent_mut(&mut self) -> Option<&mut Internal<K, V>> {
+    pub(crate) fn parent_mut(&mut self) -> Option<&mut Internal<K, V>> {
         unsafe { Some(self.parent_raw()?.as_mut().as_internal_mut()) }
     }
 
     /// SAFETY:
     ///  * ptr MUST NOT point to self
     ///  * ptr MUST NOT be dangling
-    pub unsafe fn set_parent(&mut self, parent: Option<NonNull<Node<K, V>>>) {
+    pub(crate) unsafe fn set_parent(&mut self, parent: Option<NonNull<Node<K, V>>>) {
         match self {
             Node::Internal(internal) => internal.parent = parent,
             Node::Leaf(leaf) => leaf.parent = parent,
         }
     }
 
-    pub fn keys(&self) -> Vec<&K> {
+    pub(crate) fn keys(&self) -> Vec<&K> {
         match self {
             Node::Internal(internal) => internal.keys(),
             Node::Leaf(leaf) => leaf.keys(),
         }
     }
 
-    pub fn smallest_key(&self) -> &K {
+    pub(crate) fn smallest_key(&self) -> &K {
         match self {
             Node::Internal(internal) => internal.smallest_key(),
             Node::Leaf(leaf) => leaf.smallest_key(),
@@ -87,14 +87,14 @@ where
         }
     }
 
-    pub fn size(&self) -> usize {
+    pub(crate) fn size(&self) -> usize {
         match self {
             Node::Internal(internal) => internal.size(),
             Node::Leaf(leaf) => leaf.size(),
         }
     }
 
-    pub fn as_internal(&self) -> &Internal<K, V> {
+    pub(crate) fn as_internal(&self) -> &Internal<K, V> {
         match self {
             Node::Internal(internal) => internal,
             Node::Leaf(_leaf) => {
@@ -103,7 +103,7 @@ where
         }
     }
 
-    pub fn as_internal_mut(&mut self) -> &mut Internal<K, V> {
+    pub(crate) fn as_internal_mut(&mut self) -> &mut Internal<K, V> {
         match self {
             Node::Internal(internal) => internal,
             Node::Leaf(_leaf) => {
@@ -112,7 +112,7 @@ where
         }
     }
 
-    pub fn as_leaf(&self) -> &Leaf<K, V> {
+    pub(crate) fn as_leaf(&self) -> &Leaf<K, V> {
         match self {
             Node::Internal(_internal) => {
                 panic!("Expected a Leaf node but got Internal")
@@ -130,7 +130,7 @@ where
         }
     }
 
-    pub fn insert_smallest_entry(&mut self, e: NodeEntry<K, V>) {
+    pub(crate) fn insert_smallest_entry(&mut self, e: NodeEntry<K, V>) {
         match (self, e) {
             (Node::Internal(internal), NodeEntry::Internal(e)) => internal.insert_smallest_entry(e),
             (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_smallest_entry(e),
@@ -143,14 +143,14 @@ where
         }
     }
 
-    pub fn remove_smallest_entry(&mut self) -> NodeEntry<K, V> {
+    pub(crate) fn remove_smallest_entry(&mut self) -> NodeEntry<K, V> {
         match self {
             Node::Internal(internal) => NodeEntry::Internal(internal.remove_smallest_entry()),
             Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_smallest_entry()),
         }
     }
 
-    pub fn insert_largest_entry(&mut self, e: NodeEntry<K, V>) {
+    pub(crate) fn insert_largest_entry(&mut self, e: NodeEntry<K, V>) {
         match (self, e) {
             (Node::Internal(internal), NodeEntry::Internal(e)) => internal.insert_largest_entry(e),
             (Node::Leaf(leaf), NodeEntry::Leaf(e)) => leaf.insert_largest_entry(e),
@@ -163,28 +163,28 @@ where
         }
     }
 
-    pub fn remove_largest_entry(&mut self) -> NodeEntry<K, V> {
+    pub(crate) fn remove_largest_entry(&mut self) -> NodeEntry<K, V> {
         match self {
             Node::Internal(internal) => NodeEntry::Internal(internal.remove_largest_entry()),
             Node::Leaf(leaf) => NodeEntry::Leaf(leaf.remove_largest_entry()),
         }
     }
 
-    pub fn lmerge_into(&mut self, other: &mut Node<K, V>) {
+    pub(crate) fn lmerge_into(&mut self, other: &mut Node<K, V>) {
         match self {
             Node::Internal(internal) => internal.lmerge_into(other.as_internal_mut()),
             Node::Leaf(leaf) => leaf.lmerge_into(other.as_leaf_mut()),
         }
     }
 
-    pub fn rmerge_into(&mut self, other: &mut Node<K, V>) {
+    pub(crate) fn rmerge_into(&mut self, other: &mut Node<K, V>) {
         match self {
             Node::Internal(internal) => internal.rmerge_into(other.as_internal_mut()),
             Node::Leaf(leaf) => leaf.rmerge_into(other.as_leaf_mut()),
         }
     }
 
-    pub fn is_root(&self) -> bool {
+    pub(crate) fn is_root(&self) -> bool {
         match self {
             Node::Internal(internal) => internal.is_root(),
             Node::Leaf(leaf) => leaf.is_root(),
