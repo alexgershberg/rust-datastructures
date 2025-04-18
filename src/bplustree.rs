@@ -15,8 +15,7 @@ pub(crate) mod node;
 #[derive(Debug)]
 pub struct BPlusTree<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     order: usize,
     root: Option<NonNull<Node<K, V>>>,
@@ -25,8 +24,7 @@ where
 
 impl<K, V> BPlusTree<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     pub fn size(&self) -> usize {
         self.size
@@ -234,9 +232,7 @@ where
                 let index = parent
                     .links
                     .binary_search_by(|(k, _)| k.cmp(key))
-                    .expect_err(&format!(
-                        "The parent node MUST NOT have this value: {key:?}"
-                    ));
+                    .unwrap_err();
                 parent.links.insert(index, (key.clone(), new_ptr));
 
                 let need_to_split_parent = parent.size() > self.max_node_size();
@@ -493,8 +489,7 @@ where
 
 impl<K, V> Drop for BPlusTree<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     fn drop(&mut self) {
         let Some(current) = self.root else { return };
@@ -522,8 +517,7 @@ where
 
 unsafe fn free_node_ptr<K, V>(mut ptr: NonNull<Node<K, V>>, msg: &str)
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     let node = unsafe { ptr.as_mut() };
 

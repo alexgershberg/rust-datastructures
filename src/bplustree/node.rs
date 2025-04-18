@@ -39,8 +39,7 @@ pub enum Node<K, V> {
 
 impl<K, V> Node<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     pub fn parent_raw(&self) -> Option<NonNull<Node<K, V>>> {
         match self {

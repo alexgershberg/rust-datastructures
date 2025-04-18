@@ -12,8 +12,7 @@ pub struct Leaf<K, V> {
 
 impl<K, V> Leaf<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     pub(crate) fn new() -> Self {
         Self {

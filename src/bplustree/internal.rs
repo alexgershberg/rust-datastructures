@@ -11,8 +11,7 @@ pub struct Internal<K, V> {
 
 impl<K, V> Internal<K, V>
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     pub fn split(&mut self) -> NonNull<Node<K, V>> {
         let right = self.links.split_off(self.links.len() / 2);
@@ -101,7 +100,7 @@ where
         let key1 = child1.smallest_key();
         let key2 = child2.smallest_key();
 
-        debug_assert!(key1 <= key2, "key1: {key1:?} | key2: {key2:?}");
+        debug_assert!(key1 <= key2);
 
         let internal_node = Node::Internal(Internal {
             parent: None,

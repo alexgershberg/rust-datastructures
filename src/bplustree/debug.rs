@@ -122,7 +122,7 @@ impl DebugOptions {
 pub(crate) unsafe fn print_node<K, V>(root: NonNull<Node<K, V>>, options: DebugOptions)
 where
     K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    V: Debug,
 {
     let key_length = if let Some(padding) = options.override_padding {
         padding
@@ -212,7 +212,6 @@ pub(crate) unsafe fn format_node_ptr<K, V>(
 ) -> String
 where
     K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
 {
     let n = unsafe { &*ptr.as_ptr() };
     let parent_ptr = n.parent_raw();
@@ -235,7 +234,7 @@ where
 pub(crate) unsafe fn print_node_ptr<K, V>(ptr: NonNull<Node<K, V>>)
 where
     K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    V: Debug,
 {
     unsafe {
         println!(
@@ -245,11 +244,7 @@ where
     }
 }
 
-pub fn verify<K, V>(btree: &BPlusTree<K, V>)
-where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
-{
+pub fn verify<K: Ord + PartialOrd + Clone, V>(btree: &BPlusTree<K, V>) {
     let Some(root_ptr) = btree.root else {
         return;
     };
@@ -271,8 +266,7 @@ where
 
 unsafe fn verify_internal<K, V>(node_ptr: NonNull<Node<K, V>>, parent_ptr: NonNull<Node<K, V>>)
 where
-    K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    K: Ord + PartialOrd + Clone,
 {
     let node = unsafe { node_ptr.as_ref() };
     let node_parent_ptr = node.parent_raw().unwrap();
