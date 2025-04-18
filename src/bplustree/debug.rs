@@ -1,4 +1,5 @@
 use crate::bplustree::BPlusTree;
+use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::Node;
 use std::collections::VecDeque;
@@ -241,6 +242,48 @@ where
             "{}",
             format_node_ptr(ptr, PtrDebugOptions::default().values())
         );
+    }
+}
+
+pub fn verify<K, V>(btree: &BPlusTree<K, V>)
+where
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
+{
+    let Some(root_ptr) = btree.root else {
+        return;
+    };
+
+    let root = unsafe { root_ptr.as_ref() };
+    match root {
+        Node::Internal(root) => {
+            for (k, child) in &root.links {
+                unsafe {
+                    verify_internal(*child, root_ptr);
+                }
+            }
+        }
+        Node::Leaf(root) => {
+            assert!(root.parent.is_none())
+        }
+    }
+}
+
+unsafe fn verify_internal<K, V>(node_ptr: NonNull<Node<K, V>>, parent_ptr: NonNull<Node<K, V>>)
+where
+    K: Ord + PartialOrd + Clone + Debug,
+    V: Ord + PartialOrd + Clone + Debug,
+{
+    let node = unsafe { node_ptr.as_ref() };
+    let node_parent_ptr = node.parent_raw().unwrap();
+    assert_eq!(node_parent_ptr, parent_ptr);
+
+    if let Node::Internal(node) = node {
+        for (k, child) in &node.links {
+            unsafe {
+                verify_internal(*child, node_ptr);
+            }
+        }
     }
 }
 

@@ -1,11 +1,10 @@
-use crate::bplustree::debug::print_node_ptr;
+use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
 use crate::bplustree::internal::Internal;
 use crate::bplustree::leaf::Leaf;
 use crate::bplustree::node::{Node, NodeEntry, NodeValue};
 use std::collections::VecDeque;
 use std::fmt::Debug;
 use std::mem::swap;
-use std::pin::pin;
 use std::ptr::NonNull;
 
 pub mod debug;
@@ -64,7 +63,7 @@ where
     }
 
     pub fn insert(&mut self, k: K, v: V) -> Option<V> {
-        println!("btree.insert({k:?}, {v:?});");
+        // println!("btree.insert({k:?}, {v:?});");
         self.internal_insert(k, v)
     }
 
@@ -135,7 +134,7 @@ where
     }
 
     pub fn remove(&mut self, k: &K) -> Option<V> {
-        println!("btree.remove(&{k:?});");
+        // println!("btree.remove(&{k:?});");
         let mut node_ptr = self.find_leaf_node_raw(k)?;
         let leaf = unsafe { node_ptr.as_mut().as_leaf_mut() };
         let removing_smallest = leaf.smallest_key() == k;
@@ -371,7 +370,7 @@ where
 
             left.insert_largest_entry(entry);
             unsafe {
-                self.update_parent_key(right_ptr, old, &new);
+                self.update_node_key(right.parent_raw().unwrap(), old, &new);
             }
         } else {
             let entry = left.remove_largest_entry();
@@ -386,7 +385,7 @@ where
             let new = right.smallest_key();
 
             unsafe {
-                self.update_parent_key(right_ptr, old, new);
+                self.update_node_key(right.parent_raw().unwrap(), old, new);
             }
         };
     }
@@ -416,13 +415,8 @@ where
                 };
 
                 let right = unsafe { right_ptr.as_mut() };
-                if let Some(mut right_parent_ptr) = right.parent_raw() {
-                    let parent = unsafe { right_parent_ptr.as_mut().as_internal_mut() };
-                    if let Some((r_smallest_key, _)) = parent.find_entry_mut(&r_smallest) {
-                        *r_smallest_key = l_smallest.clone();
-
-                        self.update_parent_key(right_parent_ptr, r_smallest, &l_smallest);
-                    }
+                if let Some(right_parent_ptr) = right.parent_raw() {
+                    self.update_node_key(right_parent_ptr, r_smallest, &l_smallest);
                 }
 
                 if let Some(ptr) = ptr {
@@ -473,26 +467,26 @@ where
         }
     }
 
-    unsafe fn update_parent_key<'a>(
+    unsafe fn update_node_key<'a>(
         &self,
-        mut node_ptr: NonNull<Node<K, V>>,
+        node_ptr: NonNull<Node<K, V>>,
         mut old_key: K,
         mut new_key: &'a K,
     ) where
         V: 'a,
     {
-        let mut current = unsafe { node_ptr.as_mut() };
-        while let Some(mut parent_ptr) = current.parent_raw() {
-            let parent = unsafe { parent_ptr.as_mut().as_internal_mut() };
-            let Some((k, ptr)) = parent.find_entry_mut(&old_key) else {
+        let mut current_ptr = Some(node_ptr);
+        while let Some(mut current) = current_ptr {
+            let current = unsafe { current.as_mut().as_internal_mut() }; // This function is currently only called on internal nodes, so this is safe to do.
+            let Some((k, ptr)) = current.find_entry_mut(&old_key) else {
                 return;
             };
 
-            *k = new_key.clone();
             old_key = k.clone();
-            new_key = parent.smallest_key();
+            *k = new_key.clone();
+            new_key = current.smallest_key();
 
-            current = unsafe { parent_ptr.as_mut() };
+            current_ptr = current.parent_raw();
         }
     }
 }
@@ -531,16 +525,13 @@ where
     K: Ord + PartialOrd + Clone + Debug,
     V: Ord + PartialOrd + Clone + Debug,
 {
-    println!("{msg}");
-
     let node = unsafe { ptr.as_mut() };
 
     if let Some(parent) = node.parent_raw() {
         panic!("Parent was not None on node: {ptr:?} | parent: {parent:?}");
     }
-    println!("{ptr:?}: {node:?}");
 
-    print_node_ptr(ptr);
+    // print_node_ptr(ptr);
 
     let _ = Box::from_raw(ptr.as_ptr());
 }
@@ -1102,7 +1093,7 @@ mod tests {
 
         mod remove {
             use crate::bplustree::BPlusTree;
-            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
+            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr, verify};
             use crate::bplustree::tests::LevelIterator;
 
             #[test]
@@ -1972,6 +1963,30 @@ mod tests {
             }
 
             #[test]
+            fn remove_from_leaf_node_that_is_4_levels_down() {
+                let mut btree = BPlusTree::new(3);
+                for i in 0..20 {
+                    btree.insert(i, i);
+                }
+
+                println!();
+                print_bplustree(
+                    &btree,
+                    DebugOptions::default().leaf_address().internal_address(),
+                );
+                println!();
+
+                btree.remove(&8);
+
+                println!();
+                print_bplustree(
+                    &btree,
+                    DebugOptions::default().leaf_address().internal_address(),
+                );
+                println!();
+            }
+
+            #[test]
             fn remove_smallest_should_update_the_parent() {
                 let mut btree = BPlusTree::new(4);
                 btree.insert(0, 0);
@@ -2010,7 +2025,7 @@ mod tests {
 
         mod fuzz {
             use crate::bplustree::BPlusTree;
-            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr};
+            use crate::bplustree::debug::{DebugOptions, print_bplustree, print_node_ptr, verify};
             use rand::{random_bool, random_range};
 
             #[test]
@@ -2058,10 +2073,10 @@ mod tests {
             #[test]
             #[ignore = "Non-deterministic"]
             fn insert_and_remove_at_random() {
-                let mut btree = BPlusTree::new(4);
-                let n = 50000;
-                let m = 150;
-                let p = 0.5;
+                let mut btree = BPlusTree::new(9);
+                let n = 50_000;
+                let m = 25_000;
+                let p = 0.3;
                 for i in 0..n {
                     let k = random_range(-m..=m);
 
@@ -2071,6 +2086,8 @@ mod tests {
                     } else {
                         btree.remove(&k);
                     }
+
+                    verify(&btree)
                 }
 
                 println!();
