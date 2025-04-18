@@ -23,7 +23,7 @@ pub(crate) unsafe fn cleanup_leaf<K, V>(ptr: NonNull<Node<K, V>>) {
 pub fn print_bplustree<K, V>(tree: &BPlusTree<K, V>, options: DebugOptions)
 where
     K: Ord + PartialOrd + Clone + Debug,
-    V: Ord + PartialOrd + Clone + Debug,
+    V: Debug,
 {
     let Some(root) = tree.root else {
         println!("Empty");
